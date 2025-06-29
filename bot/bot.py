@@ -3,7 +3,9 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
-from .auths import DISCORD_TOKEN, APP_ID
+from aiohttp import web
+import json
+from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
 from apps.apps import AppManager
 
 # Set up logging
@@ -16,6 +18,7 @@ class CeciliaBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
         self.app_manager = AppManager()
+        self.webhook_app = None
 
     async def setup_hook(self):
         """Called when the bot is starting up"""
@@ -29,6 +32,57 @@ class CeciliaBot(commands.Bot):
         """Called when the bot is ready"""
         logger.info(f'{self.user} has connected to Discord!')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
+
+    def create_interactions_app(self):
+        """Create aiohttp app for Discord interactions"""
+        app = web.Application()
+        app.router.add_post('/interactions', self.handle_interaction)
+        app.router.add_get('/health', self.health_check)
+        return app
+
+    async def handle_interaction(self, request):
+        """Handle Discord interactions webhook"""
+        try:
+            # Verify Discord signature here if needed
+            data = await request.json()
+            
+            # Handle ping
+            if data.get('type') == 1:
+                return web.json_response({'type': 1})
+            
+            # Handle application commands
+            if data.get('type') == 2:
+                # Process the interaction through discord.py
+                # This is a simplified handler - in production you'd want more robust processing
+                return web.json_response({
+                    'type': 4,
+                    'data': {
+                        'content': 'Command received via webhook!'
+                    }
+                })
+            
+            return web.json_response({'error': 'Unknown interaction type'}, status=400)
+            
+        except Exception as e:
+            logger.error(f"Error handling interaction: {e}")
+            return web.json_response({'error': 'Internal server error'}, status=500)
+
+    async def health_check(self, request):
+        """Health check for interactions endpoint"""
+        return web.json_response({
+            'status': 'healthy',
+            'service': 'discord_interactions',
+            'bot_ready': self.is_ready()
+        })
+
+    async def start_interactions_server(self, port: int = 8010):
+        """Start the Discord interactions webhook server"""
+        self.webhook_app = self.create_interactions_app()
+        runner = web.AppRunner(self.webhook_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '127.0.0.1', port)  # Only bind to localhost
+        await site.start()
+        logger.info(f"Discord interactions server started on port {port}")
 
 bot = CeciliaBot()
 

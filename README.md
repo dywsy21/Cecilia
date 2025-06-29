@@ -1,44 +1,45 @@
 # Cecilia
 
-A Discord bot deployable on server with HTTP interaction support!
-
-## Architecture
-
-- **Port 8010**: Discord interactions endpoint (`/bot`) - 对外开放
-- **Port 8011**: Message pusher API (`localhost` only) - 仅内部通信
+A Discord bot deployable on server with message pushing capabilities!
 
 ## Structure
 
-- `bot`: Discord bot integration and interaction handling
+The bot runs multiple services:
+- **Port 8010**: Discord interactions webhook endpoint (accessible via `/bot`)
+- **Port 8011**: Internal message pusher (localhost only)
+
+File structure:
+- `bot`: Discord bot integration and interactions handling
 - `apps`: Backend functionalities
-  - `msg_pusher`: HTTP API for internal services to send Discord messages
-  - `essay_summarizer`: ArXiv paper summarization service
+  - `msg_pusher`: Internal message pushing service
+  - `essay_summarizer`: ArXiv paper summarization
 
-## Discord Setup
+## Services
 
-1. Create a Discord application at https://discord.com/developers/applications
-2. Set the **Interactions Endpoint URL** to: `https://yourdomain.com:18080/bot/interactions`
-3. Add slash commands in the Discord Developer Portal:
-   - `/hello` - Basic greeting
-   - `/summarize` - Summarize research papers (with topic parameter)
-   - `/status` - Check bot status
+### Discord Bot
+Handles slash commands and Discord API interactions.
 
-## Message Pusher API (Internal Use Only)
+**Available Commands:**
+- `/hello` - Greet the bot
+- `/summarize <topic>` - Summarize ArXiv papers on a topic
+- `/status` - Check bot status
+- `/get_my_id` - Get your Discord IDs for testing
+- `/test_message` - Test internal message pusher
 
-**注意**: 此 API 仅供服务器内部其他进程使用，不对外开放。
+### Message Pusher (Internal)
+Accepts HTTP POST requests from other server processes to send Discord messages.
 
-Internal services can send messages to Discord via HTTP POST to `http://localhost:8011/push`.
+**Internal API Endpoint:** `http://localhost:8011/push`
 
-### JSON Schema
-
+**JSON Format:**
 ```json
 {
   "user_id": "123456789012345678",
   "message": {
     "content": "Your message content",
     "embed": {
-      "title": "Title",
-      "description": "Description", 
+      "title": "Optional Title",
+      "description": "Optional description",
       "color": "#FF5733"
     }
   },
@@ -46,55 +47,63 @@ Internal services can send messages to Discord via HTTP POST to `http://localhos
 }
 ```
 
-### Example Usage (Server Internal Only)
+### Discord Interactions Webhook
+Handles Discord slash command interactions via webhook.
+
+**Public Endpoint:** Available via Nginx at `/bot/interactions`
+
+## Deployment
+
+1. **Setup Credentials:**
+   ```bash
+   cp bot/auths-sample.py bot/auths.py
+   # Fill in your Discord bot credentials
+   ```
+
+2. **Install Dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Configure Nginx:**
+   Add the following to your Nginx configuration:
+   ```nginx
+   # Discord interactions endpoint
+   location /bot/ {
+       proxy_pass http://127.0.0.1:8010/;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   ```
+
+4. **Run the Bot:**
+   ```bash
+   python main.py
+   ```
+
+5. **Configure Discord Application:**
+   - Set interactions endpoint URL to: `https://yourdomain.com:18080/bot/interactions`
+   - Enable necessary bot permissions and scopes
+
+## Internal Message Pushing
+
+Other services on your server can send messages via:
 
 ```bash
-# 仅在服务器内部使用
 curl -X POST http://localhost:8011/push \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "USER_ID",
-    "channel_id": "CHANNEL_ID",
+    "user_id": "USER_DISCORD_ID",
     "message": {
       "content": "Hello from internal service!"
     }
   }'
 ```
 
-## Deploy
-
-1. Create `bot/auths.py` with your Discord credentials:
-   ```python
-   APP_ID = 'your_app_id'
-   DISCORD_TOKEN = 'your_bot_token'
-   PUBLIC_KEY = 'your_public_key'
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Configure Nginx to proxy **only** `/bot` to port 8010 (不要暴露端口 8011)
-
-4. Run the application:
-   ```bash
-   python main.py
-   ```
-
-## API Endpoints
-
-### Public (via Nginx proxy)
-- `GET /bot/health` - Health check for interaction service
-- `POST /bot/interactions` - Discord interactions webhook
-
-### Internal Only (localhost)
-- `GET http://localhost:8011/health` - Message pusher health check
-- `POST http://localhost:8011/push` - Send message to Discord (内部使用)
-- `GET http://localhost:8011/schema` - Get message schema
-
 ## Security Notes
 
-- 端口 8011 的 Message Pusher API 仅监听 localhost，不对外开放
-- 只有服务器内部的其他进程可以访问消息推送功能
-- Discord 交互通过端口 8010 的 `/bot` 路径处理，需要签名验证
+- Port 8011 is localhost-only for internal communication
+- Discord interactions are verified via webhook signatures
+- Only essential ports are exposed through Nginx

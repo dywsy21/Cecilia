@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from bot.bot import CeciliaBot, DISCORD_TOKEN
 from apps.apps import AppManager
 
 # Set up logging
@@ -12,26 +13,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def main():
-    """Main entry point for Cecilia bot with all services"""
-    logger.info("Starting Cecilia services...")
+    """Main entry point for Cecilia bot with concurrent services"""
+    logger.info("Starting Cecilia Discord Bot with all services...")
     
-    # Create app manager
-    app_manager = AppManager()
+    # Create bot instance
+    bot = CeciliaBot()
     
-    # Initialize all services
-    app_manager.initialize_interaction_server()
+    # Initialize message pusher after bot is created
+    bot.app_manager.initialize_msg_pusher(bot)
     
     try:
         # Create tasks for all services
-        interaction_task = asyncio.create_task(app_manager.start_interaction_server(8010))
-        pusher_task = asyncio.create_task(app_manager.start_msg_pusher_server(8011))
+        bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
+        pusher_task = asyncio.create_task(bot.app_manager.start_msg_pusher_server(8011))
+        interactions_task = asyncio.create_task(bot.start_interactions_server(8010))
         
-        logger.info("All services starting...")
-        logger.info("- Interaction server on port 8010 (public via /bot)")
-        logger.info("- Message pusher on port 8011 (internal localhost only)")
+        logger.info("Starting Discord bot, MessagePusher server, and Interactions webhook...")
         
         # Wait for all tasks
-        await asyncio.gather(interaction_task, pusher_task)
+        await asyncio.gather(bot_task, pusher_task, interactions_task)
         
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
@@ -40,6 +40,8 @@ async def main():
         raise
     finally:
         logger.info("Shutting down services...")
+        if not bot.is_closed():
+            await bot.close()
 
 def handle_signal(signum, frame):
     """Handle shutdown signals"""
@@ -55,5 +57,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Application shutdown complete")
         logger.info("Application shutdown complete")
