@@ -5,6 +5,8 @@ import asyncio
 import logging
 from aiohttp import web
 import json
+import nacl.signing
+import nacl.encoding
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
 from apps.apps import AppManager
 
@@ -19,6 +21,8 @@ class CeciliaBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents)
         self.app_manager = AppManager()
         self.webhook_app = None
+        # Setup verification key
+        self.verify_key = nacl.signing.VerifyKey(bytes.fromhex(PUBLIC_KEY))
 
     async def setup_hook(self):
         """Called when the bot is starting up"""
@@ -33,6 +37,20 @@ class CeciliaBot(commands.Bot):
         logger.info(f'{self.user} has connected to Discord!')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
 
+    def verify_signature(self, signature: str, timestamp: str, body: bytes) -> bool:
+        """Verify Discord interaction signature"""
+        try:
+            verify_key = nacl.signing.VerifyKey(bytes.fromhex(PUBLIC_KEY))
+            verify_key.verify(
+                timestamp.encode() + body, 
+                bytes.fromhex(signature),
+                encoder=nacl.encoding.HexEncoder
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Signature verification failed: {e}")
+            return False
+
     def create_interactions_app(self):
         """Create aiohttp app for Discord interactions"""
         app = web.Application()
@@ -43,25 +61,97 @@ class CeciliaBot(commands.Bot):
     async def handle_interaction(self, request):
         """Handle Discord interactions webhook"""
         try:
-            # Verify Discord signature here if needed
-            data = await request.json()
+            # Get headers for verification
+            signature = request.headers.get('X-Signature-Ed25519')
+            timestamp = request.headers.get('X-Signature-Timestamp')
             
-            # Handle ping
-            if data.get('type') == 1:
+            if not signature or not timestamp:
+                logger.error("Missing signature headers")
+                return web.json_response({'error': 'Missing signature headers'}, status=401)
+            
+            # Get raw body for verification
+            body = await request.read()
+            
+            # Verify signature
+            if not self.verify_signature(signature, timestamp, body):
+                logger.error("Invalid signature")
+                return web.json_response({'error': 'Invalid signature'}, status=401)
+            
+            # Parse JSON data
+            try:
+                data = json.loads(body.decode('utf-8'))
+            except json.JSONDecodeError:
+                logger.error("Invalid JSON in request body")
+                return web.json_response({'error': 'Invalid JSON'}, status=400)
+            
+            interaction_type = data.get('type')
+            
+            # Handle PING (type 1)
+            if interaction_type == 1:
+                logger.info("Received PING from Discord")
                 return web.json_response({'type': 1})
             
-            # Handle application commands
-            if data.get('type') == 2:
-                # Process the interaction through discord.py
-                # This is a simplified handler - in production you'd want more robust processing
-                return web.json_response({
-                    'type': 4,
-                    'data': {
-                        'content': 'Command received via webhook!'
+            # Handle Application Command (type 2)
+            if interaction_type == 2:
+                logger.info(f"Received application command: {data.get('data', {}).get('name', 'unknown')}")
+                
+                command_name = data.get('data', {}).get('name')
+                
+                if command_name == 'hello':
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    username = user.get('username', 'User')
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'content': f'Hello {username}! I\'m Cecilia, your research assistant bot! 👋'
+                        }
+                    })
+                
+                elif command_name == 'status':
+                    embed = {
+                        'title': 'Cecilia Bot Status',
+                        'description': 'I\'m online and ready to help!',
+                        'color': 0x00FF00,
+                        'fields': [
+                            {
+                                'name': 'Available Apps',
+                                'value': '• Essay Summarizer\n• Message Pusher',
+                                'inline': False
+                            },
+                            {
+                                'name': 'Service',
+                                'value': 'Webhook Active',
+                                'inline': True
+                            }
+                        ]
                     }
-                })
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'embeds': [embed]
+                        }
+                    })
+                
+                elif command_name == 'summarize':
+                    # For complex commands that need async processing, defer and use followup
+                    return web.json_response({
+                        'type': 5,  # Deferred response
+                        'data': {
+                            'content': 'Processing your request...'
+                        }
+                    })
+                
+                else:
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'content': f'Command `{command_name}` received via webhook!'
+                        }
+                    })
             
-            return web.json_response({'error': 'Unknown interaction type'}, status=400)
+            # Handle other interaction types
+            logger.warning(f"Unhandled interaction type: {interaction_type}")
+            return web.json_response({'error': 'Unhandled interaction type'}, status=400)
             
         except Exception as e:
             logger.error(f"Error handling interaction: {e}")
@@ -72,7 +162,8 @@ class CeciliaBot(commands.Bot):
         return web.json_response({
             'status': 'healthy',
             'service': 'discord_interactions',
-            'bot_ready': self.is_ready()
+            'bot_ready': self.is_ready(),
+            'verification': 'enabled'
         })
 
     async def start_interactions_server(self, port: int = 8010):
@@ -80,9 +171,17 @@ class CeciliaBot(commands.Bot):
         self.webhook_app = self.create_interactions_app()
         runner = web.AppRunner(self.webhook_app)
         await runner.setup()
-        site = web.TCPSite(runner, '127.0.0.1', port)  # Only bind to localhost
+        site = web.TCPSite(runner, '127.0.0.1', port)
         await site.start()
         logger.info(f"Discord interactions server started on port {port}")
+        
+        # Keep the server running
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            logger.info("Interactions server stopping...")
+            await runner.cleanup()
 
 bot = CeciliaBot()
 

@@ -48,7 +48,7 @@ Accepts HTTP POST requests from other server processes to send Discord messages.
 ```
 
 ### Discord Interactions Webhook
-Handles Discord slash command interactions via webhook.
+Handles Discord slash command interactions via webhook with proper signature verification.
 
 **Public Endpoint:** Available via Nginx at `/bot/interactions`
 
@@ -57,7 +57,7 @@ Handles Discord slash command interactions via webhook.
 1. **Setup Credentials:**
    ```bash
    cp bot/auths-sample.py bot/auths.py
-   # Fill in your Discord bot credentials
+   # Fill in your Discord bot credentials including PUBLIC_KEY
    ```
 
 2. **Install Dependencies:**
@@ -75,6 +75,8 @@ Handles Discord slash command interactions via webhook.
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
        proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_set_header X-Signature-Ed25519 $http_x_signature_ed25519;
+       proxy_set_header X-Signature-Timestamp $http_x_signature_timestamp;
    }
    ```
 
@@ -86,6 +88,7 @@ Handles Discord slash command interactions via webhook.
 5. **Configure Discord Application:**
    - Set interactions endpoint URL to: `https://yourdomain.com:18080/bot/interactions`
    - Enable necessary bot permissions and scopes
+   - Ensure PUBLIC_KEY is correctly set in auths.py
 
 ## Internal Message Pushing
 
@@ -105,5 +108,14 @@ curl -X POST http://localhost:8011/push \
 ## Security Notes
 
 - Port 8011 is localhost-only for internal communication
-- Discord interactions are verified via webhook signatures
+- Discord interactions are verified via Ed25519 signature verification
+- PUBLIC_KEY must be correctly configured for webhook verification
 - Only essential ports are exposed through Nginx
+
+## Troubleshooting
+
+If Discord interactions endpoint verification fails:
+1. Ensure PUBLIC_KEY in auths.py matches your Discord app's public key
+2. Check that PyNaCl is installed (`pip install pynacl`)
+3. Verify Nginx is properly forwarding signature headers
+4. Test the health endpoint: `https://yourdomain.com:18080/bot/health`
