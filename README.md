@@ -77,6 +77,10 @@ Handles Discord slash command interactions via webhook with proper signature ver
        proxy_set_header X-Forwarded-Proto $scheme;
        proxy_set_header X-Signature-Ed25519 $http_x_signature_ed25519;
        proxy_set_header X-Signature-Timestamp $http_x_signature_timestamp;
+       
+       # Important: Don't buffer the request body for signature verification
+       proxy_buffering off;
+       proxy_request_buffering off;
    }
    ```
 
@@ -86,7 +90,7 @@ Handles Discord slash command interactions via webhook with proper signature ver
    ```
 
 5. **Configure Discord Application:**
-   - Set interactions endpoint URL to: `https://yourdomain.com:18080/bot/interactions`
+   - Set interactions endpoint URL to: `https://dywsy21.cn:18080/bot/interactions`
    - Enable necessary bot permissions and scopes
    - Ensure PUBLIC_KEY is correctly set in auths.py
 
@@ -115,7 +119,47 @@ curl -X POST http://localhost:8011/push \
 ## Troubleshooting
 
 If Discord interactions endpoint verification fails:
-1. Ensure PUBLIC_KEY in auths.py matches your Discord app's public key
-2. Check that PyNaCl is installed (`pip install pynacl`)
-3. Verify Nginx is properly forwarding signature headers
-4. Test the health endpoint: `https://yourdomain.com:18080/bot/health`
+
+1. **Check PUBLIC_KEY:** Ensure it matches your Discord app's public key exactly
+   ```bash
+   # Test the health endpoint to verify public key is loaded
+   curl https://dywsy21.cn:18080/bot/health
+   ```
+
+2. **Verify Dependencies:**
+   ```bash
+   pip install pynacl>=1.5.0
+   ```
+
+3. **Test PING Response:**
+   ```bash
+   # Manual PING test (replace with actual signature headers)
+   curl -X POST https://dywsy21.cn:18080/bot/interactions \
+     -H "Content-Type: application/json" \
+     -H "X-Signature-Ed25519: YOUR_SIGNATURE" \
+     -H "X-Signature-Timestamp: YOUR_TIMESTAMP" \
+     -d '{"type": 1}'
+   ```
+
+4. **Check Nginx Configuration:**
+   - Ensure signature headers are being forwarded
+   - Verify `proxy_buffering off` is set to preserve raw request body
+   - Test: `curl -I https://dywsy21.cn:18080/bot/health`
+
+5. **Check Logs:**
+   ```bash
+   # Look for signature verification errors
+   tail -f /var/log/nginx/dywsy21_ssl_error.log
+   # Check bot logs for verification details
+   ```
+
+6. **Discord Developer Portal:**
+   - Verify the interactions endpoint URL is exactly: `https://dywsy21.cn:18080/bot/interactions`
+   - Check that the bot has the `applications.commands` scope
+   - Ensure the PUBLIC_KEY matches what's shown in the portal
+
+Common Issues:
+- **401 Unauthorized:** Usually a signature verification problem - check PUBLIC_KEY
+- **Content-Type missing:** Ensure all responses include `Content-Type: application/json`
+- **Nginx buffering:** Can interfere with signature verification - disable buffering
+- **Case sensitivity:** PUBLIC_KEY and signature headers are case-sensitive

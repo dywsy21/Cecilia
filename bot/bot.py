@@ -7,6 +7,7 @@ from aiohttp import web
 import json
 import nacl.signing
 import nacl.encoding
+from nacl.exceptions import BadSignatureError
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
 from apps.apps import AppManager
 
@@ -37,18 +38,21 @@ class CeciliaBot(commands.Bot):
         logger.info(f'{self.user} has connected to Discord!')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
 
-    def verify_signature(self, signature: str, timestamp: str, body: bytes) -> bool:
-        """Verify Discord interaction signature"""
+    def verify_signature(self, signature: str, timestamp: str, body: str) -> bool:
+        """Verify Discord interaction signature according to Discord docs"""
         try:
             verify_key = nacl.signing.VerifyKey(bytes.fromhex(PUBLIC_KEY))
+            # Discord expects timestamp + body as per their documentation
             verify_key.verify(
-                timestamp.encode() + body, 
-                bytes.fromhex(signature),
-                encoder=nacl.encoding.HexEncoder
+                f'{timestamp}{body}'.encode(), 
+                bytes.fromhex(signature)
             )
             return True
+        except BadSignatureError:
+            logger.error("Signature verification failed: BadSignatureError")
+            return False
         except Exception as e:
-            logger.error(f"Signature verification failed: {e}")
+            logger.error(f"Signature verification failed with exception: {e}")
             return False
 
     def create_interactions_app(self):
@@ -67,29 +71,45 @@ class CeciliaBot(commands.Bot):
             
             if not signature or not timestamp:
                 logger.error("Missing signature headers")
-                return web.json_response({'error': 'Missing signature headers'}, status=401)
+                return web.json_response(
+                    {'error': 'Missing signature headers'}, 
+                    status=401,
+                    headers={'Content-Type': 'application/json'}
+                )
             
-            # Get raw body for verification
-            body = await request.read()
+            # Get body as string for verification (Discord expects string, not bytes)
+            body_bytes = await request.read()
+            body = body_bytes.decode('utf-8')
             
             # Verify signature
             if not self.verify_signature(signature, timestamp, body):
                 logger.error("Invalid signature")
-                return web.json_response({'error': 'Invalid signature'}, status=401)
+                return web.json_response(
+                    {'error': 'invalid request signature'}, 
+                    status=401,
+                    headers={'Content-Type': 'application/json'}
+                )
             
             # Parse JSON data
             try:
-                data = json.loads(body.decode('utf-8'))
+                data = json.loads(body)
             except json.JSONDecodeError:
                 logger.error("Invalid JSON in request body")
-                return web.json_response({'error': 'Invalid JSON'}, status=400)
+                return web.json_response(
+                    {'error': 'Invalid JSON'}, 
+                    status=400,
+                    headers={'Content-Type': 'application/json'}
+                )
             
             interaction_type = data.get('type')
             
-            # Handle PING (type 1)
+            # Handle PING (type 1) - Must return type 1 with proper Content-Type
             if interaction_type == 1:
-                logger.info("Received PING from Discord")
-                return web.json_response({'type': 1})
+                logger.info("Received PING from Discord - responding with PONG")
+                return web.json_response(
+                    {'type': 1}, 
+                    headers={'Content-Type': 'application/json'}
+                )
             
             # Handle Application Command (type 2)
             if interaction_type == 2:
@@ -105,7 +125,7 @@ class CeciliaBot(commands.Bot):
                         'data': {
                             'content': f'Hello {username}! I\'m Cecilia, your research assistant bot! 👋'
                         }
-                    })
+                    }, headers={'Content-Type': 'application/json'})
                 
                 elif command_name == 'status':
                     embed = {
@@ -120,7 +140,7 @@ class CeciliaBot(commands.Bot):
                             },
                             {
                                 'name': 'Service',
-                                'value': 'Webhook Active',
+                                'value': 'Webhook Active ✅',
                                 'inline': True
                             }
                         ]
@@ -130,32 +150,63 @@ class CeciliaBot(commands.Bot):
                         'data': {
                             'embeds': [embed]
                         }
-                    })
+                    }, headers={'Content-Type': 'application/json'})
                 
                 elif command_name == 'summarize':
                     # For complex commands that need async processing, defer and use followup
+                    # Note: In a webhook-only setup, you'd need to handle the actual processing
+                    # via a separate background task and use Discord's followup webhook
                     return web.json_response({
                         'type': 5,  # Deferred response
+                    }, headers={'Content-Type': 'application/json'})
+                
+                elif command_name == 'get_my_id':
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id', 'Unknown')
+                    channel_id = data.get('channel_id', 'Unknown')
+                    guild_id = data.get('guild_id', 'DM')
+                    
+                    embed = {
+                        'title': 'Your Discord Information',
+                        'description': 'Use these IDs for testing',
+                        'color': 0x0099FF,
+                        'fields': [
+                            {'name': 'User ID', 'value': f'`{user_id}`', 'inline': False},
+                            {'name': 'Channel ID', 'value': f'`{channel_id}`', 'inline': False},
+                            {'name': 'Server ID', 'value': f'`{guild_id}`', 'inline': False}
+                        ]
+                    }
+                    return web.json_response({
+                        'type': 4,
                         'data': {
-                            'content': 'Processing your request...'
+                            'embeds': [embed],
+                            'flags': 64  # Ephemeral flag
                         }
-                    })
+                    }, headers={'Content-Type': 'application/json'})
                 
                 else:
                     return web.json_response({
                         'type': 4,
                         'data': {
-                            'content': f'Command `{command_name}` received via webhook!'
+                            'content': f'Command `{command_name}` received via webhook! 🚀'
                         }
-                    })
+                    }, headers={'Content-Type': 'application/json'})
             
             # Handle other interaction types
             logger.warning(f"Unhandled interaction type: {interaction_type}")
-            return web.json_response({'error': 'Unhandled interaction type'}, status=400)
+            return web.json_response(
+                {'error': 'Unhandled interaction type'}, 
+                status=400,
+                headers={'Content-Type': 'application/json'}
+            )
             
         except Exception as e:
             logger.error(f"Error handling interaction: {e}")
-            return web.json_response({'error': 'Internal server error'}, status=500)
+            return web.json_response(
+                {'error': 'Internal server error'}, 
+                status=500,
+                headers={'Content-Type': 'application/json'}
+            )
 
     async def health_check(self, request):
         """Health check for interactions endpoint"""
@@ -163,8 +214,9 @@ class CeciliaBot(commands.Bot):
             'status': 'healthy',
             'service': 'discord_interactions',
             'bot_ready': self.is_ready(),
-            'verification': 'enabled'
-        })
+            'verification': 'enabled',
+            'public_key': PUBLIC_KEY[:8] + '...',  # Show first 8 chars for verification
+        }, headers={'Content-Type': 'application/json'})
 
     async def start_interactions_server(self, port: int = 8010):
         """Start the Discord interactions webhook server"""
