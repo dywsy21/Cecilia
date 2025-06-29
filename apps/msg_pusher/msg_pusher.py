@@ -98,9 +98,20 @@ class MessagePusher:
                 if not target:
                     return {"success": False, "error": f"Channel {channel_id} not found"}
             else:
+                # Try to get user from cache first
                 target = self.bot.get_user(user_id)
+                
+                # If not in cache, try to fetch from Discord API
                 if not target:
-                    return {"success": False, "error": f"User {user_id} not found"}
+                    try:
+                        target = await self.bot.fetch_user(user_id)
+                        logger.info(f"Fetched user {user_id} from Discord API")
+                    except discord.NotFound:
+                        return {"success": False, "error": f"User {user_id} does not exist on Discord"}
+                    except discord.Forbidden:
+                        return {"success": False, "error": f"Bot cannot access user {user_id}"}
+                    except Exception as e:
+                        return {"success": False, "error": f"Failed to fetch user {user_id}: {e}"}
             
             # Build Discord message
             discord_message = await self.build_discord_message(message_data)
@@ -115,8 +126,8 @@ class MessagePusher:
                 "target": str(target)
             }
             
-        except discord.Forbidden:
-            return {"success": False, "error": "Bot doesn't have permission to message this user/channel"}
+        except discord.Forbidden as e:
+            return {"success": False, "error": "Bot doesn't have permission to message this user/channel. The user may have DMs disabled or doesn't share a server with the bot."}
         except discord.HTTPException as e:
             return {"success": False, "error": f"Discord API error: {e}"}
         except Exception as e:
