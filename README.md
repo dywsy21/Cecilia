@@ -4,7 +4,7 @@ A discord bot deployable on server!
 
 ## Structure
 
-The bot listens on port 8010.
+The bot listens on port 8010. The file with the same name as the dir it's in is this dir's "main" module. (e.g. the "main" module of bot/ dir is bot.py)
 
 - `bot`: the frontend for handling discord bot integration
 - `apps`: the backend for the bot's functionalities
