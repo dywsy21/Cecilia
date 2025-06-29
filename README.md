@@ -67,7 +67,8 @@ The message pusher accepts HTTP POST requests to `http://localhost:8011/push` wi
 curl -X POST http://localhost:8011/push \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "123456789012345678",
+    "user_id": "1131817164060495914",
+    "channel_id": "1190649951693316169",
     "message": {
       "content": "Hello from external service!"
     }
