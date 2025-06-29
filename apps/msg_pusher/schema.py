@@ -60,7 +60,7 @@ MESSAGE_SCHEMA = {
                                     },
                                     "inline": {
                                         "type": "boolean",
-                                        "default": false,
+                                        "default": False,
                                         "description": "Whether field should be inline"
                                     }
                                 }
