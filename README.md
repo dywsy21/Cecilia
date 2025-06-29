@@ -68,9 +68,11 @@ Handles Discord slash command interactions via webhook with proper signature ver
 3. **Configure Nginx:**
    Add the following to your Nginx configuration:
    ```nginx
-   # Discord interactions endpoint
+   # Discord interactions endpoint - UPDATED CONFIGURATION
    location /bot/ {
-       proxy_pass http://127.0.0.1:8010/;
+       # Strip the /bot prefix when proxying
+       rewrite ^/bot/(.*)$ /$1 break;
+       proxy_pass http://127.0.0.1:8010;
        proxy_set_header Host $host;
        proxy_set_header X-Real-IP $remote_addr;
        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -131,35 +133,58 @@ If Discord interactions endpoint verification fails:
    pip install pynacl>=1.5.0
    ```
 
-3. **Test PING Response:**
+3. **Test Routing:**
    ```bash
-   # Manual PING test (replace with actual signature headers)
-   curl -X POST https://dywsy21.cn:18080/bot/interactions \
-     -H "Content-Type: application/json" \
-     -H "X-Signature-Ed25519: YOUR_SIGNATURE" \
-     -H "X-Signature-Timestamp: YOUR_TIMESTAMP" \
-     -d '{"type": 1}'
+   # Test that the routing works correctly
+   curl -X GET https://dywsy21.cn:18080/bot/health
+   # Should return bot health status
    ```
 
-4. **Check Nginx Configuration:**
-   - Ensure signature headers are being forwarded
-   - Verify `proxy_buffering off` is set to preserve raw request body
-   - Test: `curl -I https://dywsy21.cn:18080/bot/health`
-
-5. **Check Logs:**
+4. **Manual PING Test:**
    ```bash
-   # Look for signature verification errors
+   # Test PING directly to the bot server (from server)
+   curl -X POST http://127.0.0.1:8010/interactions \
+     -H "Content-Type: application/json" \
+     -d '{"type": 1}'
+   # Should return {"type": 1}
+   ```
+
+5. **Check Nginx Configuration:**
+   - Ensure the `rewrite` rule is properly stripping `/bot` prefix
+   - Verify signature headers are being forwarded
+   - Restart Nginx after configuration changes: `sudo systemctl reload nginx`
+
+6. **Check Logs:**
+   ```bash
+   # Look for routing and signature verification errors
    tail -f /var/log/nginx/dywsy21_ssl_error.log
    # Check bot logs for verification details
    ```
 
-6. **Discord Developer Portal:**
+7. **Discord Developer Portal:**
    - Verify the interactions endpoint URL is exactly: `https://dywsy21.cn:18080/bot/interactions`
    - Check that the bot has the `applications.commands` scope
    - Ensure the PUBLIC_KEY matches what's shown in the portal
 
 Common Issues:
+- **404 Not Found:** Usually a routing problem - check Nginx rewrite rule
 - **401 Unauthorized:** Usually a signature verification problem - check PUBLIC_KEY
 - **Content-Type missing:** Ensure all responses include `Content-Type: application/json`
 - **Nginx buffering:** Can interfere with signature verification - disable buffering
 - **Case sensitivity:** PUBLIC_KEY and signature headers are case-sensitive
+
+## Updated Nginx Configuration
+
+The key change is the `rewrite` rule that strips the `/bot` prefix:
+
+```nginx
+location /bot/ {
+    rewrite ^/bot/(.*)$ /$1 break;
+    proxy_pass http://127.0.0.1:8010;
+    # ... other proxy settings
+}
+```
+
+This ensures that:
+- `https://dywsy21.cn:18080/bot/interactions` → `http://127.0.0.1:8010/interactions`
+- `https://dywsy21.cn:18080/bot/health` → `http://127.0.0.1:8010/health`

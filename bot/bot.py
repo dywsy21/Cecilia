@@ -58,8 +58,11 @@ class CeciliaBot(commands.Bot):
     def create_interactions_app(self):
         """Create aiohttp app for Discord interactions"""
         app = web.Application()
+        # Add routes for both /interactions and /bot/interactions to handle Nginx proxy
         app.router.add_post('/interactions', self.handle_interaction)
+        app.router.add_post('/bot/interactions', self.handle_interaction)
         app.router.add_get('/health', self.health_check)
+        app.router.add_get('/bot/health', self.health_check)
         return app
 
     async def handle_interaction(self, request):
@@ -150,7 +153,7 @@ class CeciliaBot(commands.Bot):
                         'data': {
                             'embeds': [embed]
                         }
-                    }, headers={'Content-Type': 'application/json'})
+                   , headers={'Content-Type': 'application/json'})
                 
                 elif command_name == 'summarize':
                     # For complex commands that need async processing, defer and use followup
