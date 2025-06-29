@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import signal
-from bot.bot import CeciliaBot
+from bot.bot import CeciliaBot, DISCORD_TOKEN
 from apps.apps import AppManager
 
 # Set up logging
@@ -24,7 +24,7 @@ async def main():
     
     try:
         # Create tasks for both services
-        bot_task = asyncio.create_task(bot.start(bot.token))
+        bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
         pusher_task = asyncio.create_task(bot.app_manager.start_msg_pusher_server(8011))
         
         logger.info("Both Discord bot and MessagePusher server starting...")

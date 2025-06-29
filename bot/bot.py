@@ -69,7 +69,7 @@ async def status(interaction: discord.Interaction):
         description="I'm online and ready to help!",
         color=discord.Color.green()
     )
-    embed.add_field(name="Available Apps", value="• Essay Summarizer", inline=False)
+    embed.add_field(name="Available Apps", value="• Essay Summarizer\n• Message Pusher", inline=False)
     embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
     embed.add_field(name="Servers", value=str(len(bot.guilds)), inline=True)
     
