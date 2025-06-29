@@ -383,7 +383,34 @@ class CeciliaBot(commands.Bot):
                         
         except Exception as e:
             logger.error(f"Error sending followup response: {e}")
-
+            
+    async def start_interactions_server(self, port: int = 8010):
+        """Start the Discord interactions webhook server"""
+        self.webhook_app = self.create_interactions_app()
+        runner = web.AppRunner(self.webhook_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '127.0.0.1', port)
+        await site.start()
+        logger.info(f"Discord interactions server started on port {port}")
+        
+        # Keep the server running
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            logger.info("Interactions server stopping...")
+            await runner.cleanup()
+            
+    async def health_check(self, request):
+        """Health check for interactions endpoint"""
+        return web.json_response({
+            'status': 'healthy',
+            'service': 'discord_interactions',
+            'bot_ready': self.is_ready(),
+            'verification': 'enabled',
+            'public_key': PUBLIC_KEY[:8] + '...',  # Show first 8 chars for verification
+        })
+    
 bot = CeciliaBot()
 
 @bot.tree.command(name="hello", description="Say hello to Cecilia!")
@@ -439,4 +466,62 @@ async def get_my_id(interaction: discord.Interaction):
     )
     embed.add_field(name="User ID", value=f"`{interaction.user.id}`", inline=False)
     embed.add_field(name="Channel ID", value=f"`{interaction.channel.id}`", inline=False)
-    embed.add_field(name="Server ID", value=f"`{interaction
+    embed.add_field(name="Server ID", value=f"`{interaction.guild.id if interaction.guild else 'DM'}`", inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="test_message", description="Test the message pusher by sending yourself a message")
+async def test_message(interaction: discord.Interaction):
+    """Test message pusher functionality"""
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Send a test message via the message pusher
+        test_data = {
+            "user_id": str(interaction.user.id),
+            "message": {
+                "embed": {
+                    "title": "🧪 Message Pusher Test",
+                    "description": "This message was sent via the HTTP message pusher API!",
+                    "color": "#00FF00",
+                    "fields": [
+                        {
+                            "name": "Test Status",
+                            "value": "✅ Success",
+                            "inline": True
+                        },
+                        {
+                            "name": "Timestamp",
+                            "value": f"<t:{int(interaction.created_at.timestamp())}:f>",
+                            "inline": True
+                        }
+                    ],
+                    "footer": {
+                        "text": "Cecilia Message Pusher"
+                    }
+                }
+            }
+        }
+        
+        # Use the message pusher directly
+        result = await bot.app_manager.msg_pusher.process_message(test_data)
+        
+        if result['success']:
+            await interaction.followup.send(f"✅ Test message sent successfully! Message ID: `{result['message_id']}`", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ Test failed: {result['error']}", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in test_message command: {e}")
+        await interaction.followup.send(f"❌ Test failed with error: {str(e)}", ephemeral=True)
+
+def run_bot():
+    """Function to run the bot"""
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        raise
+
+if __name__ == "__main__":
+    run_bot()
