@@ -1,2 +1,3 @@
 venv
 bot/auths.py
+**/__pycache__
