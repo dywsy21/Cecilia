@@ -10,6 +10,7 @@ import nacl.encoding
 from nacl.exceptions import BadSignatureError
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
 from apps.apps import AppManager
+import aiohttp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,10 +29,67 @@ class CeciliaBot(commands.Bot):
     async def setup_hook(self):
         """Called when the bot is starting up"""
         try:
-            synced = await self.tree.sync()
-            logger.info(f"Synced {len(synced)} command(s)")
+            # For webhook-only mode, we need to register commands via HTTP API
+            await self.register_slash_commands()
+            logger.info("Slash commands registered via HTTP API")
         except Exception as e:
-            logger.error(f"Failed to sync commands: {e}")
+            logger.error(f"Failed to register commands: {e}")
+
+    async def register_slash_commands(self):
+        """Register slash commands via Discord HTTP API"""
+        commands_to_register = [
+            {
+                "name": "hello",
+                "type": 1,  # CHAT_INPUT
+                "description": "Say hello to Cecilia!"
+            },
+            {
+                "name": "summarize",
+                "type": 1,
+                "description": "Summarize essays on ArXiv about a specific topic",
+                "options": [
+                    {
+                        "name": "topic",
+                        "description": "The research topic to search for",
+                        "type": 3,  # STRING
+                        "required": True
+                    }
+                ]
+            },
+            {
+                "name": "status",
+                "type": 1,
+                "description": "Check bot status and available apps"
+            },
+            {
+                "name": "get_my_id",
+                "type": 1,
+                "description": "Get your Discord user ID for message pusher testing"
+            },
+            {
+                "name": "test_message",
+                "type": 1,
+                "description": "Test the message pusher by sending yourself a message"
+            }
+        ]
+
+        url = f"https://discord.com/api/v10/applications/{APP_ID}/commands"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            for command in commands_to_register:
+                try:
+                    async with session.post(url, headers=headers, json=command) as response:
+                        if response.status == 200 or response.status == 201:
+                            logger.info(f"Successfully registered command: {command['name']}")
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Failed to register command {command['name']}: {response.status} - {error_text}")
+                except Exception as e:
+                    logger.error(f"Error registering command {command['name']}: {e}")
 
     async def on_ready(self):
         """Called when the bot is ready"""
@@ -119,9 +177,9 @@ class CeciliaBot(commands.Bot):
             
             # Handle Application Command (type 2)
             if interaction_type == 2:
-                logger.info(f"Received application command: {data.get('data', {}).get('name', 'unknown')}")
-                
-                command_name = data.get('data', {}).get('name')
+                command_data = data.get('data', {})
+                command_name = command_data.get('name')
+                logger.info(f"Received application command: {command_name}")
                 
                 if command_name == 'hello':
                     user = data.get('member', {}).get('user', data.get('user', {}))
@@ -159,6 +217,26 @@ class CeciliaBot(commands.Bot):
                     })
                 
                 elif command_name == 'summarize':
+                    # Get the topic parameter
+                    options = command_data.get('options', [])
+                    topic = None
+                    for option in options:
+                        if option.get('name') == 'topic':
+                            topic = option.get('value')
+                            break
+                    
+                    if not topic:
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': 'Please provide a topic to summarize!'
+                            }
+                        })
+                    
+                    # For webhook-only mode, we need to defer and handle async
+                    # Start background task to process and send followup
+                    asyncio.create_task(self.handle_summarize_command(data, topic))
+                    
                     return web.json_response({
                         'type': 5,  # Deferred response
                     })
@@ -187,6 +265,18 @@ class CeciliaBot(commands.Bot):
                         }
                     })
                 
+                elif command_name == 'test_message':
+                    # Start background task for test message
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id')
+                    
+                    if user_id:
+                        asyncio.create_task(self.handle_test_message_command(data, user_id))
+                        
+                    return web.json_response({
+                        'type': 5,  # Deferred response
+                    })
+                
                 else:
                     return web.json_response({
                         'type': 4,
@@ -209,32 +299,90 @@ class CeciliaBot(commands.Bot):
                 status=500
             )
 
-    async def health_check(self, request):
-        """Health check for interactions endpoint"""
-        return web.json_response({
-            'status': 'healthy',
-            'service': 'discord_interactions',
-            'bot_ready': self.is_ready(),
-            'verification': 'enabled',
-            'public_key': PUBLIC_KEY[:8] + '...',  # Show first 8 chars for verification
-        })
-
-    async def start_interactions_server(self, port: int = 8010):
-        """Start the Discord interactions webhook server"""
-        self.webhook_app = self.create_interactions_app()
-        runner = web.AppRunner(self.webhook_app)
-        await runner.setup()
-        site = web.TCPSite(runner, '127.0.0.1', port)
-        await site.start()
-        logger.info(f"Discord interactions server started on port {port}")
-        
-        # Keep the server running
+    async def handle_summarize_command(self, interaction_data, topic):
+        """Handle summarize command with followup response"""
         try:
-            while True:
-                await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            logger.info("Interactions server stopping...")
-            await runner.cleanup()
+            # Process the summarization
+            result = await self.app_manager.summarize_essays(topic)
+            
+            # Send followup response
+            await self.send_followup_response(interaction_data, {
+                'content': result
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in summarize command: {e}")
+            await self.send_followup_response(interaction_data, {
+                'content': f'Sorry, there was an error processing your request: {str(e)}'
+            })
+
+    async def handle_test_message_command(self, interaction_data, user_id):
+        """Handle test message command with followup response"""
+        try:
+            test_data = {
+                "user_id": str(user_id),
+                "message": {
+                    "embed": {
+                        "title": "🧪 Message Pusher Test",
+                        "description": "This message was sent via the HTTP message pusher API!",
+                        "color": "#00FF00",
+                        "fields": [
+                            {
+                                "name": "Test Status",
+                                "value": "✅ Success",
+                                "inline": True
+                            }
+                        ],
+                        "footer": {
+                            "text": "Cecilia Message Pusher"
+                        }
+                    }
+                }
+            }
+            
+            result = await self.app_manager.msg_pusher.process_message(test_data)
+            
+            if result['success']:
+                await self.send_followup_response(interaction_data, {
+                    'content': f'✅ Test message sent successfully! Message ID: `{result["message_id"]}`',
+                    'flags': 64  # Ephemeral
+                })
+            else:
+                await self.send_followup_response(interaction_data, {
+                    'content': f'❌ Test failed: {result["error"]}',
+                    'flags': 64
+                })
+                
+        except Exception as e:
+            logger.error(f"Error in test_message command: {e}")
+            await self.send_followup_response(interaction_data, {
+                'content': f'❌ Test failed with error: {str(e)}',
+                'flags': 64
+            })
+
+    async def send_followup_response(self, interaction_data, response_data):
+        """Send a followup response to an interaction"""
+        try:
+            interaction_token = interaction_data.get('token')
+            if not interaction_token:
+                logger.error("No interaction token found for followup")
+                return
+            
+            url = f"https://discord.com/api/v10/webhooks/{APP_ID}/{interaction_token}"
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=response_data) as response:
+                    if response.status == 200:
+                        logger.info("Followup response sent successfully")
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to send followup: {response.status} - {error_text}")
+                        
+        except Exception as e:
+            logger.error(f"Error sending followup response: {e}")
 
 bot = CeciliaBot()
 
@@ -291,64 +439,4 @@ async def get_my_id(interaction: discord.Interaction):
     )
     embed.add_field(name="User ID", value=f"`{interaction.user.id}`", inline=False)
     embed.add_field(name="Channel ID", value=f"`{interaction.channel.id}`", inline=False)
-    embed.add_field(name="Server ID", value=f"`{interaction.guild.id if interaction.guild else 'DM'}`", inline=False)
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="test_message", description="Test the message pusher by sending yourself a message")
-async def test_message(interaction: discord.Interaction):
-    """Test message pusher functionality"""
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        # Send a test message via the message pusher
-        test_data = {
-            "user_id": str(interaction.user.id),
-            "message": {
-                "embed": {
-                    "title": "🧪 Message Pusher Test",
-                    "description": "This message was sent via the HTTP message pusher API!",
-                    "color": "#00FF00",
-                    "fields": [
-                        {
-                            "name": "Test Status",
-                            "value": "✅ Success",
-                            "inline": True
-                        },
-                        {
-                            "name": "Timestamp",
-                            "value": f"<t:{int(interaction.created_at.timestamp())}:f>",
-                            "inline": True
-                        }
-                    ],
-                    "footer": {
-                        "text": "Cecilia Message Pusher"
-                    }
-                }
-            }
-        }
-        
-        # Use the message pusher directly
-        result = await bot.app_manager.msg_pusher.process_message(test_data)
-        
-        if result['success']:
-            await interaction.followup.send(f"✅ Test message sent successfully! Message ID: `{result['message_id']}`", ephemeral=True)
-        else:
-            await interaction.followup.send(f"❌ Test failed: {result['error']}", ephemeral=True)
-            
-    except Exception as e:
-        logger.error(f"Error in test_message command: {e}")
-        await interaction.followup.send(f"❌ Test failed with error: {str(e)}", ephemeral=True)
-
-def run_bot():
-    """Function to run the bot"""
-    try:
-        bot.run(DISCORD_TOKEN)
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        raise
-
-if __name__ == "__main__":
-    run_bot()
-if __name__ == "__main__":
-    run_bot()
+    embed.add_field(name="Server ID", value=f"`{interaction

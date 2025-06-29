@@ -17,7 +17,7 @@ File structure:
 ## Services
 
 ### Discord Bot
-Handles slash commands and Discord API interactions.
+Handles slash commands and Discord API interactions via webhook.
 
 **Available Commands:**
 - `/hello` - Greet the bot
@@ -25,6 +25,8 @@ Handles slash commands and Discord API interactions.
 - `/status` - Check bot status
 - `/get_my_id` - Get your Discord IDs for testing
 - `/test_message` - Test internal message pusher
+
+**Note:** Commands are registered automatically via HTTP API when the bot starts.
 
 ### Message Pusher (Internal)
 Accepts HTTP POST requests from other server processes to send Discord messages.
@@ -165,6 +167,19 @@ If Discord interactions endpoint verification fails:
    - Verify the interactions endpoint URL is exactly: `https://dywsy21.cn:18080/bot/interactions`
    - Check that the bot has the `applications.commands` scope
    - Ensure the PUBLIC_KEY matches what's shown in the portal
+
+8. **Command Registration Issues:**
+   ```bash
+   # Check if commands are registered
+   curl -H "Authorization: Bot YOUR_BOT_TOKEN" \
+     https://discord.com/api/v10/applications/YOUR_APP_ID/commands
+   ```
+
+9. **Slash Commands Not Appearing:**
+   - Commands may take up to 1 hour to appear globally
+   - For faster testing, use guild-specific commands
+   - Check bot permissions include `applications.commands` scope
+   - Verify APP_ID is correct in auths.py
 
 Common Issues:
 - **404 Not Found:** Usually a routing problem - check Nginx rewrite rule
