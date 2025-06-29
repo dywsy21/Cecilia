@@ -1,6 +1,10 @@
 # Cecilia
 
+![#c](pics/bot.jpg)
+
 A discord bot deployable on server!
+
+Invitation Link: https://discord.com/oauth2/authorize?client_id=1388147931659501658
 
 ## Structure
 
