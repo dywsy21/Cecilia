@@ -1,15 +1,31 @@
 import asyncio
 import logging
 from .essay_summarizer.essay_summarizer import EssaySummarizer
+from .msg_pusher.msg_pusher import create_message_pusher
 
 logger = logging.getLogger(__name__)
 
 class AppManager:
     """Manages all bot applications and their functionalities"""
     
-    def __init__(self):
+    def __init__(self, bot_instance=None):
         self.essay_summarizer = EssaySummarizer()
+        self.msg_pusher = None
+        self.bot_instance = bot_instance
         logger.info("AppManager initialized")
+    
+    def initialize_msg_pusher(self, bot_instance):
+        """Initialize message pusher with bot instance"""
+        self.bot_instance = bot_instance
+        self.msg_pusher = create_message_pusher(bot_instance)
+        logger.info("MessagePusher initialized in AppManager")
+    
+    async def start_msg_pusher_server(self, port: int = 8011):
+        """Start the message pusher HTTP server"""
+        if self.msg_pusher:
+            await self.msg_pusher.start_server(port)
+        else:
+            logger.error("MessagePusher not initialized")
     
     async def summarize_essays(self, topic: str) -> str:
         """
@@ -33,5 +49,6 @@ class AppManager:
         """Get status of all apps"""
         return {
             "essay_summarizer": "online",
-            "total_apps": 1
+            "msg_pusher": "online" if self.msg_pusher else "not initialized",
+            "total_apps": 2
         }
