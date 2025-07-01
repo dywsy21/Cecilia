@@ -23,10 +23,9 @@ Handles slash commands and Discord API interactions via webhook.
 
 **Available Commands:**
 - `/hello` - Greet the bot
-- `/summarize <topic>` - Summarize ArXiv papers on a topic
 - `/status` - Check bot status
 - `/get_my_id` - Get your Discord IDs for testing
-- `/test_message` - Test internal message pusher
+- Arxiv Essay Summarizer commands, see below
 
 **Note:** Commands are registered automatically via HTTP API when the bot starts.
 
@@ -36,8 +35,7 @@ Accepts HTTP POST requests from other server processes to send Discord messages.
 
 **Internal API Endpoint:** `http://localhost:8011/push`
 
-**JSON Format:**
-
+**JSON Format:**: See `apps/msg_pusher/schema.py`
 
 ### Essay Summarizer Services
 
@@ -123,14 +121,14 @@ We use Ollama to run models locally. To generate a response using AI:
 
 ```sh
 curl http://localhost:11434/api/generate -d '{
-  "model": "llama3.2",
+  "model": "deepseek-r1:32b",
   "prompt":"Why is the sky blue?"
 }'
 ```
 
 We use the equivalent python code to interact with Ollama.
 
-We use deepseek to summarize the results, remove the <think>.*</think> thinking part.
+We use deepseek to summarize the results, and will remove the `<think>.*</think>` thinking part.
 
 #### Summarizing & Pushing Workflow
 
@@ -170,7 +168,7 @@ Handles Discord slash command interactions via webhook with proper signature ver
 
 1. **Setup Credentials:**
    ```bash
-   cp bot/auths-sample.py bot/auths.py
+   mv bot/auths-sample.py bot/auths.py
    # Fill in your Discord bot credentials including PUBLIC_KEY
    ```
 
@@ -202,7 +200,7 @@ Handles Discord slash command interactions via webhook with proper signature ver
 
 4. **Run the Bot:**
    ```bash
-   python main.py
+   ./deploy.sh
    ```
 
 5. **Configure Discord Application:**
