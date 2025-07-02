@@ -293,6 +293,159 @@ class EssaySummarizer:
             logger.error(f"Error calling message pusher API: {e}")
             return {"success": False, "error": str(e)}
 
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """Truncate text to maximum length while preserving word boundaries"""
+        if len(text) <= max_length:
+            return text
+        
+        # Find the last space before the limit
+        truncated = text[:max_length-3]
+        last_space = truncated.rfind(' ')
+        
+        if last_space > 0:
+            return truncated[:last_space] + "..."
+        else:
+            return truncated + "..."
+
+    def _create_paper_embed(self, paper: Dict, index: int, total_count: int, topic: str) -> Dict:
+        """Create individual embed for a single paper with full utilization of embed limits"""
+        
+        # Prepare authors string
+        authors_str = ", ".join(paper['authors'])
+        if len(authors_str) > 200:  # Limit for field value
+            authors_str = self._truncate_text(authors_str, 200)
+        
+        # Prepare categories string
+        categories_str = ", ".join(paper['categories'])
+        if len(categories_str) > 200:
+            categories_str = self._truncate_text(categories_str, 200)
+        
+        # Truncate title for embed title (256 char limit)
+        title = self._truncate_text(paper['title'], 250)
+        
+        # Use full 4096 character limit for description with the AI summary
+        description = f"**论文总结：**\n\n{paper['summary']}"
+        description = self._truncate_text(description, 4090)  # Leave some buffer
+        
+        # Create rich embed with visual appeal
+        embed = {
+            "title": f"📄 {title}",
+            "description": description,
+            "color": self._get_paper_color(index),
+            "fields": [
+                {
+                    "name": "👥 作者",
+                    "value": authors_str,
+                    "inline": False
+                },
+                {
+                    "name": "🏷️ 分类",
+                    "value": categories_str or "未分类",
+                    "inline": True
+                },
+                {
+                    "name": "📊 进度",
+                    "value": f"{index}/{total_count}",
+                    "inline": True
+                },
+                {
+                    "name": "🔗 链接",
+                    "value": f"[📖 阅读原文]({paper['pdf_url']})",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": f"主题: {topic} • Cecilia 研究助手 • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            },
+            "thumbnail": {
+                "url": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png"
+            }
+        }
+        
+        return embed
+
+    def _get_paper_color(self, index: int) -> str:
+        """Get color for paper embed based on index"""
+        colors = [
+            "#1f8b4c",  # Green
+            "#3498db",  # Blue  
+            "#9b59b6",  # Purple
+            "#e91e63",  # Pink
+            "#f39c12",  # Orange
+            "#e74c3c",  # Red
+            "#1abc9c",  # Teal
+            "#34495e",  # Dark gray
+            "#16a085",  # Dark teal
+            "#8e44ad"   # Dark purple
+        ]
+        return colors[index % len(colors)]
+
+    def _create_summary_header_embed(self, topic: str, total_papers: int, new_count: int, cached_count: int) -> Dict:
+        """Create header embed with summary statistics"""
+        
+        # Create description with processing stats
+        if new_count > 0 and cached_count > 0:
+            status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
+        elif new_count > 0:
+            status_text = f"🆕 全部新处理: {new_count} 篇"
+        elif cached_count > 0:
+            status_text = f"💾 全部来自缓存: {cached_count} 篇"
+        else:
+            status_text = f"📊 共找到: {total_papers} 篇"
+
+        description = f"""🔍 **搜索主题:** {topic}
+📈 **处理状态:** 
+{status_text}
+
+⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+📚 即将为您展示每篇论文的详细总结..."""
+
+        embed = {
+            "title": "🎯 ArXiv 论文总结报告",
+            "description": description,
+            "color": "#2ecc71",
+            "fields": [
+                {
+                    "name": "📊 统计信息",
+                    "value": f"📄 总论文数: **{total_papers}**\n🔄 处理状态: **完成**\n⚡ 响应时间: **实时**",
+                    "inline": True
+                },
+                {
+                    "name": "🛠️ 技术信息", 
+                    "value": "🤖 AI模型: **DeepSeek-R1-32B**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "Cecilia 研究助手 • 基于最新 ArXiv 数据"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return embed
+
+    async def _send_embeds_with_interval(self, user_id: str, embeds: List[Dict], interval: float = 2.0):
+        """Send multiple embeds with time intervals to avoid rate limits"""
+        
+        for i, embed in enumerate(embeds):
+            try:
+                message_data = {"embed": embed}
+                api_result = await self._send_message_via_api(user_id, message_data)
+                
+                if api_result["success"]:
+                    logger.info(f"Sent embed {i+1}/{len(embeds)} successfully")
+                else:
+                    logger.error(f"Failed to send embed {i+1}/{len(embeds)}: {api_result.get('error', 'Unknown error')}")
+                
+                # Add interval between messages to avoid rate limits (except for last message)
+                if i < len(embeds) - 1:
+                    await asyncio.sleep(interval)
+                    
+            except Exception as e:
+                logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
+                continue
+
     async def summarize_and_push(self, topic: str, user_id: str = None) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
@@ -333,10 +486,10 @@ class EssaySummarizer:
                             # Add existing summary to results
                             summarized_papers.append({
                                 'title': existing_summary['title'],
-                                'authors': existing_summary['authors'][:3],  # Limit authors
+                                'authors': existing_summary['authors'],
                                 'summary': existing_summary['summary'],
                                 'pdf_url': existing_summary.get('pdf_url', ''),
-                                'categories': existing_summary.get('categories', [])[:3]  # Limit categories
+                                'categories': existing_summary.get('categories', [])
                             })
                             reused_count += 1
                             logger.info(f"Reused existing summary for paper {paper_id}")
@@ -372,10 +525,10 @@ class EssaySummarizer:
                     # Add to results
                     summarized_papers.append({
                         'title': paper['title'],
-                        'authors': paper['authors'][:3],  # Limit authors
+                        'authors': paper['authors'],
                         'summary': summary,
                         'pdf_url': paper.get('pdf_url', ''),
-                        'categories': paper.get('categories', [])[:3]  # Limit categories
+                        'categories': paper.get('categories', [])
                     })
                     
                     processed_count += 1
@@ -391,16 +544,26 @@ class EssaySummarizer:
             
             logger.info(f"Processing complete: {processed_count} new papers processed, {reused_count} existing summaries reused")
             
-            # Create Discord message - now always create if we have any papers (new or existing)
+            # Create and send embeds if we have papers
             if summarized_papers:
-                logger.info(f"Creating Discord message for {len(summarized_papers)} papers")
-                message_data = self._create_summary_message(topic, summarized_papers, processed_count, reused_count)
+                logger.info(f"Creating and sending {len(summarized_papers)} embed messages")
                 
-                # Send via message pusher API if user_id provided
                 if user_id:
-                    logger.info(f"Sending results to user {user_id} via message pusher API")
-                    api_result = await self._send_message_via_api(user_id, message_data)
-                    logger.debug(f"Message pusher API result: {api_result}")
+                    # Create header embed
+                    header_embed = self._create_summary_header_embed(topic, len(summarized_papers), processed_count, reused_count)
+                    
+                    # Create individual paper embeds
+                    paper_embeds = []
+                    for i, paper in enumerate(summarized_papers, 1):
+                        paper_embed = self._create_paper_embed(paper, i, len(summarized_papers), topic)
+                        paper_embeds.append(paper_embed)
+                    
+                    # Combine all embeds (header + papers)
+                    all_embeds = [header_embed] + paper_embeds
+                    
+                    # Send all embeds with intervals
+                    logger.info(f"Sending {len(all_embeds)} embeds to user {user_id}")
+                    await self._send_embeds_with_interval(user_id, all_embeds, interval=2.5)
                 
                 return {
                     "success": True,
@@ -421,51 +584,6 @@ class EssaySummarizer:
             logger.error(f"Error in summarize_and_push for topic '{topic}': {e}")
             logger.exception("Full traceback for summarize_and_push error:")
             return {"success": False, "error": str(e)}
-    
-    def _create_summary_message(self, topic: str, papers: List[Dict], new_count: int = 0, cached_count: int = 0) -> Dict:
-        """Create a Discord message with paper summaries"""
-        # Create description with processing stats
-        if new_count > 0 and cached_count > 0:
-            description = f"Found {len(papers)} papers ({new_count} newly processed, {cached_count} from cache):"
-        elif new_count > 0:
-            description = f"Found {len(papers)} papers (all newly processed):"
-        elif cached_count > 0:
-            description = f"Found {len(papers)} papers (all from cache):"
-        else:
-            description = f"Found {len(papers)} papers:"
-        
-        embed = {
-            "title": f"📚 Latest Research on '{topic.title()}'",
-            "description": description,
-            "color": "#1f8b4c",
-            "fields": [],
-            "footer": {
-                "text": f"Cecilia Research Assistant • Processed at {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            }
-        }
-        
-        for i, paper in enumerate(papers, 1):
-            authors_str = ", ".join(paper['authors'])
-            if len(paper['authors']) > 3:
-                authors_str += " et al."
-            
-            field_value = f"**Authors:** {authors_str}\n"
-            field_value += f"**Categories:** {', '.join(paper['categories'])}\n"
-            field_value += f"**Summary:** {paper['summary']}\n"
-            field_value += f"[📄 Read Paper]({paper['pdf_url']})"
-            
-            embed["fields"].append({
-                "name": f"{i}. {paper['title'][:100]}{'...' if len(paper['title']) > 100 else ''}",
-                "value": field_value,
-                "inline": False
-            })
-        
-        return {"embed": embed}
-    
-    async def instantly_summarize_and_push(self, topic: str, user_id: str) -> Dict:
-        """Instantly summarize papers for a topic and push to user"""
-        result = await self.summarize_and_push(topic, user_id)
-        return result
     
     # Subscription Management
     def _load_subscriptions(self) -> Dict[str, List[str]]:
@@ -570,31 +688,5 @@ class EssaySummarizer:
                 
             except Exception as e:
                 logger.error(f"Error in scheduler: {e}")
-                # Sleep for an hour before retrying
-                await asyncio.sleep(3600)
-        while True:
-            try:
-                now = datetime.now()
-                target_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
-                
-                # If it's past 7 AM today, schedule for tomorrow
-                if now.time() > time(7, 0):
-                    target_time = target_time.replace(day=target_time.day + 1)
-                
-                # Calculate sleep time
-                sleep_seconds = (target_time - now).total_seconds()
-                logger.info(f"Next subscription run scheduled for: {target_time}")
-                
-                await asyncio.sleep(sleep_seconds)
-                
-                # Run the subscription processing
-                logger.info("Starting daily subscription processing")
-                await self.summarize_from_subscriptions()
-                logger.info("Daily subscription processing completed")
-                
-            except Exception as e:
-                logger.error(f"Error in scheduler: {e}")
-                # Sleep for an hour before retrying
-                await asyncio.sleep(3600)
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
