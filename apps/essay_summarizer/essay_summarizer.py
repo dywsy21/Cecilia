@@ -375,6 +375,7 @@ class EssaySummarizer:
                     logger.info(f"Sending results to user {user_id} via message pusher")
                     push_data = {
                         "user_id": str(user_id),
+                        "channel_id": "1190649951693316169",  # Include fallback channel_id
                         "message": message_data
                     }
                     push_result = await self.app_manager.msg_pusher.process_message(push_data)

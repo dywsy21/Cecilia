@@ -92,6 +92,9 @@ class MessagePusher:
             channel_id = data.get('channel_id')
             priority = data.get('priority', 'normal')
             
+            # Use fallback channel if no channel_id provided
+            fallback_channel_id = "1190649951693316169"
+            
             # Get user or channel
             if channel_id:
                 target = self.bot.get_channel(int(channel_id))
@@ -107,11 +110,20 @@ class MessagePusher:
                         target = await self.bot.fetch_user(user_id)
                         logger.info(f"Fetched user {user_id} from Discord API")
                     except discord.NotFound:
-                        return {"success": False, "error": f"User {user_id} does not exist on Discord"}
+                        logger.warning(f"User {user_id} not found, using fallback channel {fallback_channel_id}")
+                        target = self.bot.get_channel(int(fallback_channel_id))
+                        if not target:
+                            return {"success": False, "error": f"User {user_id} does not exist and fallback channel {fallback_channel_id} not found"}
                     except discord.Forbidden:
-                        return {"success": False, "error": f"Bot cannot access user {user_id}"}
+                        logger.warning(f"Cannot access user {user_id}, using fallback channel {fallback_channel_id}")
+                        target = self.bot.get_channel(int(fallback_channel_id))
+                        if not target:
+                            return {"success": False, "error": f"Bot cannot access user {user_id} and fallback channel {fallback_channel_id} not found"}
                     except Exception as e:
-                        return {"success": False, "error": f"Failed to fetch user {user_id}: {e}"}
+                        logger.warning(f"Failed to fetch user {user_id}: {e}, using fallback channel {fallback_channel_id}")
+                        target = self.bot.get_channel(int(fallback_channel_id))
+                        if not target:
+                            return {"success": False, "error": f"Failed to fetch user {user_id} and fallback channel {fallback_channel_id} not found: {e}"}
             
             # Build Discord message
             discord_message = await self.build_discord_message(message_data)
@@ -127,6 +139,30 @@ class MessagePusher:
             }
             
         except discord.Forbidden as e:
+            # If DM fails, try fallback channel
+            if not channel_id:  # Only try fallback if we were originally trying DM
+                try:
+                    fallback_channel_id = "1190649951693316169"
+                    fallback_target = self.bot.get_channel(int(fallback_channel_id))
+                    if fallback_target:
+                        discord_message = await self.build_discord_message(message_data)
+                        # Add mention to the message content for fallback channel
+                        if 'content' in discord_message:
+                            discord_message['content'] = f"<@{user_id}> {discord_message['content']}"
+                        else:
+                            discord_message['content'] = f"<@{user_id}>"
+                        
+                        sent_message = await fallback_target.send(**discord_message)
+                        logger.info(f"Message sent to fallback channel {fallback_target} for user {user_id}")
+                        return {
+                            "success": True,
+                            "message_id": str(sent_message.id),
+                            "target": str(fallback_target),
+                            "fallback": True
+                        }
+                except Exception as fallback_error:
+                    logger.error(f"Fallback channel also failed: {fallback_error}")
+            
             return {"success": False, "error": "Bot doesn't have permission to message this user/channel. The user may have DMs disabled or doesn't share a server with the bot."}
         except discord.HTTPException as e:
             return {"success": False, "error": f"Discord API error: {e}"}

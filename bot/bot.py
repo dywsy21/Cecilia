@@ -487,6 +487,7 @@ class CeciliaBot(commands.Bot):
             # Send error via message pusher
             error_data = {
                 "user_id": str(user_id),
+                "channel_id": "1190649951693316169",  # Include fallback channel_id
                 "message": {
                     "content": f"❌ Sorry, there was an error processing your request for '{topic}': {str(e)}"
                 }
