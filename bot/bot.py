@@ -473,6 +473,31 @@ class CeciliaBot(commands.Bot):
                 'content': f'❌ Sorry, there was an error: {str(e)}'
             })
 
+    async def _send_error_via_api(self, user_id: str, error_message: str):
+        """Send error message via HTTP API to message pusher"""
+        try:
+            url = "http://localhost:8011/push"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "user_id": str(user_id),
+                "channel_id": "1190649951693316169",
+                "message": {
+                    "content": error_message
+                }
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Error message sent successfully via API: {result}")
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to send error message via API {response.status}: {error_text}")
+                        
+        except Exception as e:
+            logger.error(f"Error calling message pusher API for error message: {e}")
+
     async def handle_instantly_show_command(self, interaction_data, topic, user_id):
         """Handle instantly show command with message pusher"""
         try:
@@ -484,15 +509,9 @@ class CeciliaBot(commands.Bot):
             
         except Exception as e:
             logger.error(f"Error in instantly show command: {e}")
-            # Send error via message pusher
-            error_data = {
-                "user_id": str(user_id),
-                "channel_id": "1190649951693316169",  # Include fallback channel_id
-                "message": {
-                    "content": f"❌ Sorry, there was an error processing your request for '{topic}': {str(e)}"
-                }
-            }
-            await self.app_manager.msg_pusher.process_message(error_data)
+            # Send error via message pusher API
+            error_message = f"❌ Sorry, there was an error processing your request for '{topic}': {str(e)}"
+            await self._send_error_via_api(user_id, error_message)
 
     async def send_followup_response(self, interaction_data, response_data):
         """Send a followup response to an interaction"""

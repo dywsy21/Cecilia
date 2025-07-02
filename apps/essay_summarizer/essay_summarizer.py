@@ -267,6 +267,32 @@ class EssaySummarizer:
             logger.error(f"Error loading existing summary for {paper_id}: {e}")
             return None
 
+    async def _send_message_via_api(self, user_id: str, message_data: Dict) -> Dict:
+        """Send message via HTTP API to message pusher"""
+        try:
+            url = "http://localhost:8011/push"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "user_id": str(user_id),
+                "channel_id": "1190649951693316169",
+                "message": message_data
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Message sent successfully via API: {result}")
+                        return {"success": True, "result": result}
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Message pusher API error {response.status}: {error_text}")
+                        return {"success": False, "error": f"API error {response.status}: {error_text}"}
+                        
+        except Exception as e:
+            logger.error(f"Error calling message pusher API: {e}")
+            return {"success": False, "error": str(e)}
+
     async def summarize_and_push(self, topic: str, user_id: str = None) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
@@ -370,16 +396,11 @@ class EssaySummarizer:
                 logger.info(f"Creating Discord message for {len(summarized_papers)} papers")
                 message_data = self._create_summary_message(topic, summarized_papers, processed_count, reused_count)
                 
-                # Send via message pusher if user_id provided
-                if user_id and self.app_manager and self.app_manager.msg_pusher:
-                    logger.info(f"Sending results to user {user_id} via message pusher")
-                    push_data = {
-                        "user_id": str(user_id),
-                        "channel_id": "1190649951693316169",  # Include fallback channel_id
-                        "message": message_data
-                    }
-                    push_result = await self.app_manager.msg_pusher.process_message(push_data)
-                    logger.debug(f"Message pusher result: {push_result}")
+                # Send via message pusher API if user_id provided
+                if user_id:
+                    logger.info(f"Sending results to user {user_id} via message pusher API")
+                    api_result = await self._send_message_via_api(user_id, message_data)
+                    logger.debug(f"Message pusher API result: {api_result}")
                 
                 return {
                     "success": True,
