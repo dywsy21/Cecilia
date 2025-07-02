@@ -202,15 +202,14 @@ Paper Content:
                         
                         return summary
                     else:
-                        error_text = await response.text()
-                        logger.error(f"Ollama API error: {response.status} - {error_text}")
+                        logger.error(f"Ollama API error: {response.status}")
                         return None
                         
         except Exception as e:
             logger.error(f"Error summarizing with Ollama: {e}")
             return None
     
-    async def check_ollama_service(self) -> bool:
+    async def check_ollama_service(self):
         """Check if Ollama service is running"""
         try:
             async with aiohttp.ClientSession() as session:
@@ -219,25 +218,53 @@ Paper Content:
                         logger.info("Ollama service is running")
                         return True
                     else:
-                        logger.error(f"Ollama service responded with status: {response.status}")
+                        logger.error(f"Ollama service not responding: {response.status}")
                         return False
         except Exception as e:
-            logger.error(f"Ollama service not available: {e}")
+            logger.error(f"Error checking Ollama service: {e}")
             return False
-
+    
+    def _get_paper_hash(self, paper_id: str) -> str:
+        """Get hash for paper to check if already processed"""
+        return hashlib.md5(paper_id.encode()).hexdigest()
+    
+    def _is_paper_processed(self, paper_id: str) -> bool:
+        """Check if paper has been processed before"""
+        paper_hash = self._get_paper_hash(paper_id)
+        summary_file = self.summaries_dir / f"{paper_hash}.json"
+        return summary_file.exists()
+    
+    async def _save_paper_summary(self, paper: Dict, summary: str):
+        """Save paper summary to disk"""
+        paper_hash = self._get_paper_hash(paper['id'])
+        summary_file = self.summaries_dir / f"{paper_hash}.json"
+        
+        summary_data = {
+            'paper_id': paper['id'],
+            'title': paper['title'],
+            'authors': paper['authors'],
+            'pdf_url': paper.get('pdf_url', ''),
+            'summary': summary,
+            'processed_at': datetime.now().isoformat(),
+            'categories': paper.get('categories', [])
+        }
+        
+        async with aiofiles.open(summary_file, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(summary_data, indent=2, ensure_ascii=False))
+    
     async def summarize_and_push(self, topic: str, user_id: str = None) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
             logger.info(f"Starting summarization workflow for topic: {topic}")
             
-            # Check if Ollama service is running
-            if not await self.check_ollama_service():
-                return {"success": False, "error": "Ollama service is not available. Please ensure 'ollama serve' is running."}
-            
             # Search for papers
             papers = await self.search_arxiv(topic, max_results=10)
             if not papers:
                 return {"success": False, "error": f"No papers found for topic: {topic}"}
+            
+            # Check if Ollama service is running
+            if not await self.check_ollama_service():
+                return {"success": False, "error": "Ollama service is not running. Please ensure 'ollama serve' is running."}
             
             summarized_papers = []
             
@@ -446,7 +473,7 @@ Paper Content:
                 if now.time() > time(7, 0):
                     target_time = target_time.replace(day=target_time.day + 1)
                 
-                # Calculate sleep time
+               # Calculate sleep time
                 sleep_seconds = (target_time - now).total_seconds()
                 logger.info(f"Next subscription run scheduled for: {target_time}")
                 
@@ -461,54 +488,4 @@ Paper Content:
                 logger.error(f"Error in scheduler: {e}")
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
-        if user_id not in subscriptions or not subscriptions[user_id]:
-            return "📝 You have no active subscriptions.\nUse `/subscribe add [topic]` to add a subscription!"
         
-        topics = subscriptions[user_id]
-        topics_list = "\n".join([f"• {topic}" for topic in topics])
-        
-        return f"📚 **Your Research Subscriptions:**\n{topics_list}\n\n🕰️ Daily summaries are sent at 7:00 AM"
-    
-    async def summarize_from_subscriptions(self):
-        """Process all subscriptions (called by scheduler)"""
-        subscriptions = self._load_subscriptions()
-        
-        for user_id, topics in subscriptions.items():
-            for topic in topics:
-                try:
-                    logger.info(f"Processing subscription: {topic} for user {user_id}")
-                    await self.summarize_and_push(topic, user_id)
-                    # Add delay between processing to avoid rate limits
-                    await asyncio.sleep(5)
-                except Exception as e:
-                    logger.error(f"Error processing subscription {topic} for user {user_id}: {e}")
-                    continue
-    
-    async def start_scheduler(self):
-        """Start the daily scheduler for subscriptions"""
-        logger.info("Starting subscription scheduler")
-        
-        while True:
-            try:
-                now = datetime.now()
-                target_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
-                
-                # If it's past 7 AM today, schedule for tomorrow
-                if now.time() > time(7, 0):
-                    target_time = target_time.replace(day=target_time.day + 1)
-                
-                # Calculate sleep time
-                sleep_seconds = (target_time - now).total_seconds()
-                logger.info(f"Next subscription run scheduled for: {target_time}")
-                
-                await asyncio.sleep(sleep_seconds)
-                
-                # Run the subscription processing
-                logger.info("Starting daily subscription processing")
-                await self.summarize_from_subscriptions()
-                logger.info("Daily subscription processing completed")
-                
-            except Exception as e:
-                logger.error(f"Error in scheduler: {e}")
-                # Sleep for an hour before retrying
-                await asyncio.sleep(3600)

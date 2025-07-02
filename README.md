@@ -117,10 +117,17 @@ The pdf file can be downloaded from `<link title="pdf" href="http://arxiv.org/pd
 
 #### AI Usage Guides
 
-We use Ollama to run models locally. The Ollama service should be running as a systemd service:
+We use Ollama to run models locally. Ollama should be running as a systemd service:
 
 ```sh
-ollama serve
+# Start Ollama service
+sudo systemctl start ollama
+
+# Enable Ollama to start on boot
+sudo systemctl enable ollama
+
+# Check service status
+sudo systemctl status ollama
 ```
 
 To generate a response using AI:
@@ -141,8 +148,8 @@ We use deepseek-r1:32b to summarize the results, and will remove the `<think>.*<
 
 ```
 SummarizeAndPush(topic):
-    Check if Ollama service is running
     Use arxiv api to retrieve the latest papers of that topic, at most 10 papers
+    Check if Ollama service is running
     for each paper:
         Check on disk, if already summarized before: 
             continue (don't add to overall results)
