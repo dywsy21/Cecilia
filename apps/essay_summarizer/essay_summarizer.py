@@ -209,7 +209,7 @@ Paper Content:
             logger.error(f"Error summarizing with Ollama: {e}")
             return None
     
-    async def check_ollama_service(self):
+    async def check_ollama_service(self) -> bool:
         """Check if Ollama service is running"""
         try:
             async with aiohttp.ClientSession() as session:
@@ -218,10 +218,10 @@ Paper Content:
                         logger.info("Ollama service is running")
                         return True
                     else:
-                        logger.error(f"Ollama service not responding: {response.status}")
+                        logger.error("Ollama service returned non-200 status")
                         return False
         except Exception as e:
-            logger.error(f"Error checking Ollama service: {e}")
+            logger.error(f"Ollama service check failed: {e}")
             return False
     
     def _get_paper_hash(self, paper_id: str) -> str:
@@ -262,9 +262,9 @@ Paper Content:
             if not papers:
                 return {"success": False, "error": f"No papers found for topic: {topic}"}
             
-            # Check if Ollama service is running
+            # Check Ollama service
             if not await self.check_ollama_service():
-                return {"success": False, "error": "Ollama service is not running. Please ensure 'ollama serve' is running."}
+                return {"success": False, "error": "Ollama service is not running. Please ensure ollama serve is running."}
             
             summarized_papers = []
             
@@ -473,7 +473,7 @@ Paper Content:
                 if now.time() > time(7, 0):
                     target_time = target_time.replace(day=target_time.day + 1)
                 
-               # Calculate sleep time
+                # Calculate sleep time
                 sleep_seconds = (target_time - now).total_seconds()
                 logger.info(f"Next subscription run scheduled for: {target_time}")
                 
@@ -488,4 +488,27 @@ Paper Content:
                 logger.error(f"Error in scheduler: {e}")
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
-        
+        while True:
+            try:
+                now = datetime.now()
+                target_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+                
+                # If it's past 7 AM today, schedule for tomorrow
+                if now.time() > time(7, 0):
+                    target_time = target_time.replace(day=target_time.day + 1)
+                
+                # Calculate sleep time
+                sleep_seconds = (target_time - now).total_seconds()
+                logger.info(f"Next subscription run scheduled for: {target_time}")
+                
+                await asyncio.sleep(sleep_seconds)
+                
+                # Run the subscription processing
+                logger.info("Starting daily subscription processing")
+                await self.summarize_from_subscriptions()
+                logger.info("Daily subscription processing completed")
+                
+            except Exception as e:
+                logger.error(f"Error in scheduler: {e}")
+                # Sleep for an hour before retrying
+                await asyncio.sleep(3600)

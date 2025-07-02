@@ -117,17 +117,11 @@ The pdf file can be downloaded from `<link title="pdf" href="http://arxiv.org/pd
 
 #### AI Usage Guides
 
-We use Ollama to run models locally. Ollama should be running as a systemd service:
+We use Ollama to run models locally. The Ollama service should be running as a systemd service:
 
 ```sh
-# Start Ollama service
 sudo systemctl start ollama
-
-# Enable Ollama to start on boot
 sudo systemctl enable ollama
-
-# Check service status
-sudo systemctl status ollama
 ```
 
 To generate a response using AI:
