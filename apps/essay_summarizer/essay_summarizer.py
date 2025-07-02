@@ -169,19 +169,17 @@ class EssaySummarizer:
     async def summarize_with_ollama(self, paper_content: str, paper_title: str) -> Optional[str]:
         """Summarize paper content using Ollama"""
         try:
-            prompt = f"""Please provide a clear and concise summary of this research paper. Focus on:
-1. The main research question or problem
-2. Key methodology or approach
-3. Main findings or contributions
-4. Practical implications or applications
+            prompt = f"""请为这篇研究论文提供清晰简洁的总结。重点关注：
+1. 主要研究问题或问题
+2. 关键方法或途径
+3. 主要发现或贡献
+4. 实际意义或应用
 
-Make the summary accessible to a general academic audience. 
+总结应该便于一般学术读者理解，保持在300字以内。
 
-请用中文完成撰写，保持在300字以内。
+论文标题：{paper_title}
 
-Paper Title: {paper_title}
-
-Paper Content:
+论文内容：
 {paper_content[:18000]}"""
 
             payload = {
@@ -254,50 +252,95 @@ Paper Content:
         async with aiofiles.open(summary_file, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(summary_data, indent=2, ensure_ascii=False))
     
+    async def _load_existing_summary(self, paper_id: str) -> Optional[Dict]:
+        """Load existing summary for a paper"""
+        try:
+            paper_hash = self._get_paper_hash(paper_id)
+            summary_file = self.summaries_dir / f"{paper_hash}.json"
+            
+            if summary_file.exists():
+                async with aiofiles.open(summary_file, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                    return json.loads(content)
+            return None
+        except Exception as e:
+            logger.error(f"Error loading existing summary for {paper_id}: {e}")
+            return None
+
     async def summarize_and_push(self, topic: str, user_id: str = None) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
-            logger.info(f"Starting summarization workflow for topic: {topic}")
+            logger.info(f"Starting summarization workflow for topic: '{topic}' (user: {user_id})")
             
             # Search for papers
+            logger.info(f"Searching ArXiv for papers on topic: '{topic}'")
             papers = await self.search_arxiv(topic, max_results=10)
             if not papers:
+                logger.warning(f"No papers found for topic: '{topic}'")
                 return {"success": False, "error": f"No papers found for topic: {topic}"}
             
+            logger.info(f"Found {len(papers)} papers for topic '{topic}'")
+            for i, paper in enumerate(papers, 1):
+                logger.debug(f"Paper {i}: {paper['id']} - {paper['title'][:100]}...")
+            
             # Check Ollama service
+            logger.info("Checking Ollama service availability...")
             if not await self.check_ollama_service():
+                logger.error("Ollama service check failed")
                 return {"success": False, "error": "Ollama service is not running. Please ensure ollama serve is running."}
             
             summarized_papers = []
+            processed_count = 0
+            reused_count = 0
             
-            for paper in papers:
+            for i, paper in enumerate(papers, 1):
                 try:
                     paper_id = paper['id']
+                    logger.info(f"Processing paper {i}/{len(papers)}: {paper_id}")
                     
                     # Check if already processed
                     if self._is_paper_processed(paper_id):
-                        logger.info(f"Paper {paper_id} already processed, skipping")
-                        continue
+                        logger.info(f"Paper {paper_id} already processed, loading existing summary")
+                        existing_summary = await self._load_existing_summary(paper_id)
+                        
+                        if existing_summary:
+                            # Add existing summary to results
+                            summarized_papers.append({
+                                'title': existing_summary['title'],
+                                'authors': existing_summary['authors'][:3],  # Limit authors
+                                'summary': existing_summary['summary'],
+                                'pdf_url': existing_summary.get('pdf_url', ''),
+                                'categories': existing_summary.get('categories', [])[:3]  # Limit categories
+                            })
+                            reused_count += 1
+                            logger.info(f"Reused existing summary for paper {paper_id}")
+                            continue
+                        else:
+                            logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
                     
                     # Download PDF
+                    logger.debug(f"Step 1/3: Downloading PDF for paper {paper_id}")
                     pdf_path = await self.download_pdf(paper.get('pdf_url', ''), paper_id)
                     if not pdf_path:
-                        logger.warning(f"Could not download PDF for paper {paper_id}")
+                        logger.warning(f"Could not download PDF for paper {paper_id}, skipping")
                         continue
                     
                     # Convert to markdown
+                    logger.debug(f"Step 2/3: Converting PDF to markdown for paper {paper_id}")
                     markdown_content = await self.pdf_to_markdown(pdf_path)
                     if not markdown_content:
-                        logger.warning(f"Could not convert PDF to markdown for paper {paper_id}")
+                        logger.warning(f"Could not convert PDF to markdown for paper {paper_id}, skipping")
                         continue
                     
                     # Summarize with AI
+                    logger.debug(f"Step 3/3: Generating AI summary for paper {paper_id}")
                     summary = await self.summarize_with_ollama(markdown_content, paper['title'])
                     if not summary:
-                        logger.warning(f"Could not generate summary for paper {paper_id}")
+                        logger.warning(f"Could not generate summary for paper {paper_id}, skipping")
                         continue
                     
                     # Save summary
+                    logger.debug(f"Saving summary for paper {paper_id}")
                     await self._save_paper_summary(paper, summary)
                     
                     # Add to results
@@ -309,45 +352,69 @@ Paper Content:
                         'categories': paper.get('categories', [])[:3]  # Limit categories
                     })
                     
-                    logger.info(f"Successfully processed paper: {paper['title'][:50]}...")
+                    processed_count += 1
+                    logger.info(f"Successfully processed paper {i}/{len(papers)}: {paper['title'][:50]}...")
+                    
+                    # Add small delay between papers to be nice to APIs
+                    await asyncio.sleep(1)
                     
                 except Exception as e:
                     logger.error(f"Error processing paper {paper.get('id', 'unknown')}: {e}")
+                    logger.exception("Full traceback for paper processing error:")
                     continue
             
-            # Create Discord message
+            logger.info(f"Processing complete: {processed_count} new papers processed, {reused_count} existing summaries reused")
+            
+            # Create Discord message - now always create if we have any papers (new or existing)
             if summarized_papers:
-                message_data = self._create_summary_message(topic, summarized_papers)
+                logger.info(f"Creating Discord message for {len(summarized_papers)} papers")
+                message_data = self._create_summary_message(topic, summarized_papers, processed_count, reused_count)
                 
                 # Send via message pusher if user_id provided
                 if user_id and self.app_manager and self.app_manager.msg_pusher:
+                    logger.info(f"Sending results to user {user_id} via message pusher")
                     push_data = {
                         "user_id": str(user_id),
                         "message": message_data
                     }
-                    await self.app_manager.msg_pusher.process_message(push_data)
+                    push_result = await self.app_manager.msg_pusher.process_message(push_data)
+                    logger.debug(f"Message pusher result: {push_result}")
                 
                 return {
                     "success": True,
-                    "message": f"Processed {len(summarized_papers)} new papers for topic '{topic}'",
-                    "papers_count": len(summarized_papers)
+                    "message": f"Found {len(summarized_papers)} papers for topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
+                    "papers_count": len(summarized_papers),
+                    "new_papers": processed_count,
+                    "cached_papers": reused_count
                 }
             else:
+                logger.info(f"No papers could be processed for topic '{topic}'")
                 return {
-                    "success": True,
-                    "message": f"No new papers to process for topic '{topic}' (all already processed)",
+                    "success": False,
+                    "error": f"No papers could be processed for topic '{topic}' - all papers failed processing",
                     "papers_count": 0
                 }
                 
         except Exception as e:
-            logger.error(f"Error in summarize_and_push: {e}")
+            logger.error(f"Error in summarize_and_push for topic '{topic}': {e}")
+            logger.exception("Full traceback for summarize_and_push error:")
             return {"success": False, "error": str(e)}
     
-    def _create_summary_message(self, topic: str, papers: List[Dict]) -> Dict:
+    def _create_summary_message(self, topic: str, papers: List[Dict], new_count: int = 0, cached_count: int = 0) -> Dict:
         """Create a Discord message with paper summaries"""
+        # Create description with processing stats
+        if new_count > 0 and cached_count > 0:
+            description = f"Found {len(papers)} papers ({new_count} newly processed, {cached_count} from cache):"
+        elif new_count > 0:
+            description = f"Found {len(papers)} papers (all newly processed):"
+        elif cached_count > 0:
+            description = f"Found {len(papers)} papers (all from cache):"
+        else:
+            description = f"Found {len(papers)} papers:"
+        
         embed = {
             "title": f"📚 Latest Research on '{topic.title()}'",
-            "description": f"Found {len(papers)} new papers to summarize:",
+            "description": description,
             "color": "#1f8b4c",
             "fields": [],
             "footer": {
@@ -355,7 +422,7 @@ Paper Content:
             }
         }
         
-        for i, paper in enumerate(papers, 1):  # Limit to 5 papers for Discord embed limits
+        for i, paper in enumerate(papers, 1):
             authors_str = ", ".join(paper['authors'])
             if len(paper['authors']) > 3:
                 authors_str += " et al."
@@ -505,5 +572,7 @@ Paper Content:
                 
             except Exception as e:
                 logger.error(f"Error in scheduler: {e}")
+                # Sleep for an hour before retrying
+                await asyncio.sleep(3600)
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
