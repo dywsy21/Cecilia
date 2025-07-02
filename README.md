@@ -117,7 +117,13 @@ The pdf file can be downloaded from `<link title="pdf" href="http://arxiv.org/pd
 
 #### AI Usage Guides
 
-We use Ollama to run models locally. To generate a response using AI:
+We use Ollama to run models locally. To launch Ollama service:
+
+```sh
+ollama run deepseek-r1:32b
+```
+
+To generate a response using AI:
 
 ```sh
 curl http://localhost:11434/api/generate -d '{
@@ -128,20 +134,22 @@ curl http://localhost:11434/api/generate -d '{
 
 We use the equivalent python code to interact with Ollama.
 
-We use deepseek to summarize the results, and will remove the `<think>.*</think>` thinking part.
+We use deepseek:32b to summarize the results, and will remove the `<think>.*</think>` thinking part.
 
 #### Summarizing & Pushing Workflow
 
 ```
 SummarizeAndPush(topic):
-    Use arxiv api to retrieve the latest papers of that topic
-    for each paper: (we summarize at most 10 papers once)
+    Use arxiv api to retrieve the latest papers of that topic, at most 10 papers
+    Launch Ollama service
+    for each paper:
         Check on disk, if already summarized before: 
             continue (don't add to overall results)
         Get the paper's pdf file
         Use markitdown to get the markdown version of this pdf
         Use Ollama api to summarize the paper (needs to be easy to understand)
         Add result to overall results (including the pdf link)
+    End Ollama service
     Construct a pretty discord flavor json message based on the overall results
     Send the json message to the user via Message Pusher
     Store the pdfs and the summarization results on disk
