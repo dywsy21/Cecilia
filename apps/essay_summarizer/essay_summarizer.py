@@ -175,12 +175,14 @@ class EssaySummarizer:
 3. Main findings or contributions
 4. Practical implications or applications
 
-Make the summary accessible to a general academic audience. Keep it under 300 words.
+Make the summary accessible to a general academic audience. 
+
+请用中文完成撰写，保持在300字以内。
 
 Paper Title: {paper_title}
 
 Paper Content:
-{paper_content[:8000]}"""
+{paper_content[:18000]}"""
 
             payload = {
                 "model": "deepseek-r1:32b",
@@ -353,26 +355,19 @@ Paper Content:
             }
         }
         
-        for i, paper in enumerate(papers[:5], 1):  # Limit to 5 papers for Discord embed limits
+        for i, paper in enumerate(papers, 1):  # Limit to 5 papers for Discord embed limits
             authors_str = ", ".join(paper['authors'])
             if len(paper['authors']) > 3:
                 authors_str += " et al."
             
             field_value = f"**Authors:** {authors_str}\n"
             field_value += f"**Categories:** {', '.join(paper['categories'])}\n"
-            field_value += f"**Summary:** {paper['summary'][:200]}...\n"
+            field_value += f"**Summary:** {paper['summary']}\n"
             field_value += f"[📄 Read Paper]({paper['pdf_url']})"
             
             embed["fields"].append({
                 "name": f"{i}. {paper['title'][:100]}{'...' if len(paper['title']) > 100 else ''}",
                 "value": field_value,
-                "inline": False
-            })
-        
-        if len(papers) > 5:
-            embed["fields"].append({
-                "name": "📋 Additional Papers",
-                "value": f"And {len(papers) - 5} more papers were processed. Check your subscription for the complete list!",
                 "inline": False
             })
         
