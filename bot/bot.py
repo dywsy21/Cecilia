@@ -444,6 +444,55 @@ class CeciliaBot(commands.Bot):
                 'flags': 64
             })
 
+    async def handle_subscribe_command(self, interaction_data, action, topic, user_id):
+        """Handle subscription management command"""
+        try:
+            if action == 'list':
+                result = await self.app_manager.essay_summarizer.list_subscriptions(user_id)
+            elif action == 'add':
+                if not topic:
+                    result = "❌ Please provide a topic to add to your subscriptions!"
+                else:
+                    result = await self.app_manager.essay_summarizer.add_subscription(user_id, topic)
+            elif action == 'remove':
+                if not topic:
+                    result = "❌ Please provide a topic to remove from your subscriptions!"
+                else:
+                    result = await self.app_manager.essay_summarizer.remove_subscription(user_id, topic)
+            else:
+                result = "❌ Invalid action. Use 'list', 'add', or 'remove'."
+            
+            # Send followup response
+            await self.send_followup_response(interaction_data, {
+                'content': result
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in subscribe command: {e}")
+            await self.send_followup_response(interaction_data, {
+                'content': f'❌ Sorry, there was an error: {str(e)}'
+            })
+
+    async def handle_instantly_show_command(self, interaction_data, topic, user_id):
+        """Handle instantly show command with message pusher"""
+        try:
+            # Start the summarization process
+            result = await self.app_manager.essay_summarizer.instantly_summarize_and_push(topic, user_id)
+            
+            # The result is sent via message pusher, so we don't need to send a followup
+            logger.info(f"Instantly show command completed for topic: {topic}")
+            
+        except Exception as e:
+            logger.error(f"Error in instantly show command: {e}")
+            # Send error via message pusher
+            error_data = {
+                "user_id": str(user_id),
+                "message": {
+                    "content": f"❌ Sorry, there was an error processing your request for '{topic}': {str(e)}"
+                }
+            }
+            await self.app_manager.msg_pusher.process_message(error_data)
+
     async def send_followup_response(self, interaction_data, response_data):
         """Send a followup response to an interaction"""
         try:
