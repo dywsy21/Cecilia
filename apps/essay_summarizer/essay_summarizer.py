@@ -585,6 +585,11 @@ class EssaySummarizer:
             logger.exception("Full traceback for summarize_and_push error:")
             return {"success": False, "error": str(e)}
     
+    async def instantly_summarize_and_push(self, topic: str, user_id: str) -> Dict:
+        """Instantly summarize papers for a topic and push to user"""
+        result = await self.summarize_and_push(topic, user_id)
+        return result
+    
     # Subscription Management
     def _load_subscriptions(self) -> Dict[str, List[str]]:
         """Load subscriptions from disk"""
