@@ -12,12 +12,15 @@ class AppManager:
         self.essay_summarizer = EssaySummarizer()
         self.msg_pusher = None
         self.bot_instance = bot_instance
+        self.scheduler_task = None
         logger.info("AppManager initialized")
     
     def initialize_msg_pusher(self, bot_instance):
         """Initialize message pusher with bot instance"""
         self.bot_instance = bot_instance
         self.msg_pusher = create_message_pusher(bot_instance)
+        # Set app manager reference in essay summarizer for message pushing
+        self.essay_summarizer.set_app_manager(self)
         logger.info("MessagePusher initialized in AppManager")
     
     async def start_msg_pusher_server(self, port: int = 8011):
@@ -26,6 +29,12 @@ class AppManager:
             await self.msg_pusher.start_server(port)
         else:
             logger.error("MessagePusher not initialized")
+    
+    async def start_essay_scheduler(self):
+        """Start the essay subscription scheduler"""
+        if not self.scheduler_task or self.scheduler_task.done():
+            self.scheduler_task = asyncio.create_task(self.essay_summarizer.start_scheduler())
+            logger.info("Essay subscription scheduler started")
     
     async def summarize_essays(self, topic: str) -> str:
         """
@@ -39,8 +48,13 @@ class AppManager:
         """
         try:
             logger.info(f"Starting essay summarization for topic: {topic}")
-            result = await self.essay_summarizer.summarize_topic(topic)
-            return result
+            result = await self.essay_summarizer.summarize_and_push(topic)
+            
+            if result['success']:
+                return f"✅ {result['message']}"
+            else:
+                return f"❌ {result['error']}"
+                
         except Exception as e:
             logger.error(f"Error in essay summarization: {e}")
             return f"Sorry, I couldn't summarize essays for '{topic}'. Error: {str(e)}"
@@ -50,5 +64,12 @@ class AppManager:
         return {
             "essay_summarizer": "online",
             "msg_pusher": "online" if self.msg_pusher else "not initialized",
+            "scheduler": "running" if self.scheduler_task and not self.scheduler_task.done() else "stopped",
             "total_apps": 2
         }
+    
+    async def shutdown(self):
+        """Gracefully shutdown all services"""
+        if self.scheduler_task and not self.scheduler_task.done():
+            self.scheduler_task.cancel()
+            logger.info("Essay scheduler stopped")

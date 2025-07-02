@@ -44,15 +44,39 @@ class CeciliaBot(commands.Bot):
                 "description": "Say hello to Cecilia!"
             },
             {
-                "name": "summarize",
+                "name": "instantlyshow",
                 "type": 1,
-                "description": "Summarize essays on ArXiv about a specific topic",
+                "description": "Instantly summarize essays on ArXiv about a specific topic",
                 "options": [
                     {
                         "name": "topic",
                         "description": "The research topic to search for",
                         "type": 3,  # STRING
                         "required": True
+                    }
+                ]
+            },
+            {
+                "name": "subscribe",
+                "type": 1,
+                "description": "Manage your research topic subscriptions",
+                "options": [
+                    {
+                        "name": "action",
+                        "description": "Action to perform",
+                        "type": 3,  # STRING
+                        "required": True,
+                        "choices": [
+                            {"name": "list", "value": "list"},
+                            {"name": "add", "value": "add"},
+                            {"name": "remove", "value": "remove"}
+                        ]
+                    },
+                    {
+                        "name": "topic",
+                        "description": "Topic to add or remove (not needed for list)",
+                        "type": 3,  # STRING
+                        "required": False
                     }
                 ]
             },
@@ -277,6 +301,66 @@ class CeciliaBot(commands.Bot):
                         'type': 5,  # Deferred response
                     })
                 
+                elif command_name == 'instantlyshow':
+                    # Get the topic parameter
+                    options = command_data.get('options', [])
+                    topic = None
+                    for option in options:
+                        if option.get('name') == 'topic':
+                            topic = option.get('value')
+                            break
+                    
+                    if not topic:
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': 'Please provide a topic to summarize!'
+                            }
+                        })
+                    
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id')
+                    
+                    # Send immediate response
+                    asyncio.create_task(self.handle_instantly_show_command(data, topic, user_id))
+                    
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'content': f'🔄 Processing... Analyzing latest papers on "{topic}". Results will be sent to you shortly!'
+                        }
+                    })
+                
+                elif command_name == 'subscribe':
+                    # Get parameters
+                    options = command_data.get('options', [])
+                    action = None
+                    topic = None
+                    
+                    for option in options:
+                        if option.get('name') == 'action':
+                            action = option.get('value')
+                        elif option.get('name') == 'topic':
+                            topic = option.get('value')
+                    
+                    if not action:
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': 'Please specify an action (list, add, or remove)!'
+                            }
+                        })
+                    
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id')
+                    
+                    # Handle subscription management
+                    asyncio.create_task(self.handle_subscribe_command(data, action, topic, user_id))
+                    
+                    return web.json_response({
+                        'type': 5,  # Deferred response
+                    })
+
                 else:
                     return web.json_response({
                         'type': 4,

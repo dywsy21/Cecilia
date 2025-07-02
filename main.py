@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def main():
-    """Main entry point for Cecilia bot with concurrent services"""
+    """Main entry point for Cecilia bot with all services"""
     logger.info("Starting Cecilia Discord Bot with all services...")
     
     # Create bot instance
@@ -27,11 +27,12 @@ async def main():
         bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
         pusher_task = asyncio.create_task(bot.app_manager.start_msg_pusher_server(8011))
         interactions_task = asyncio.create_task(bot.start_interactions_server(8010))
+        scheduler_task = asyncio.create_task(bot.app_manager.start_essay_scheduler())
         
-        logger.info("Starting Discord bot, MessagePusher server, and Interactions webhook...")
+        logger.info("Starting Discord bot, MessagePusher server, Interactions webhook, and Essay scheduler...")
         
         # Wait for all tasks
-        await asyncio.gather(bot_task, pusher_task, interactions_task)
+        await asyncio.gather(bot_task, pusher_task, interactions_task, scheduler_task)
         
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
@@ -40,6 +41,7 @@ async def main():
         raise
     finally:
         logger.info("Shutting down services...")
+        await bot.app_manager.shutdown()
         if not bot.is_closed():
             await bot.close()
 
