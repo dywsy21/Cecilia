@@ -11,6 +11,7 @@ from nacl.exceptions import BadSignatureError
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
 from apps.apps import AppManager
 import aiohttp
+import sys
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -531,21 +532,33 @@ class CeciliaBot(commands.Bot):
             
     async def start_interactions_server(self, port: int = 8010):
         """Start the Discord interactions webhook server"""
-        self.webhook_app = self.create_interactions_app()
-        runner = web.AppRunner(self.webhook_app)
-        await runner.setup()
-        site = web.TCPSite(runner, '127.0.0.1', port)
-        await site.start()
-        logger.info(f"Discord interactions server started on port {port}")
-        
-        # Keep the server running
         try:
-            while True:
-                await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            logger.info("Interactions server stopping...")
-            await runner.cleanup()
+            self.webhook_app = self.create_interactions_app()
+            runner = web.AppRunner(self.webhook_app)
+            await runner.setup()
+            site = web.TCPSite(runner, '127.0.0.1', port)
+            await site.start()
+            logger.info(f"Discord interactions server started on port {port}")
             
+            # Keep the server running
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                logger.info("Interactions server stopping...")
+                await runner.cleanup()
+                
+        except OSError as e:
+            if e.errno == 98:  # Address already in use
+                logger.error(f"Port {port} already in use - cannot start interactions server")
+                raise CeciliaServiceError(f"Cannot bind to port {port} - address already in use")
+            else:
+                logger.error(f"OS error starting interactions server: {e}")
+                raise CeciliaServiceError(f"System error starting interactions server: {e}")
+        except Exception as e:
+            logger.error(f"Failed to start interactions server: {e}")
+            raise CeciliaServiceError(f"Cannot start interactions server: {e}")
+
     async def health_check(self, request):
         """Health check for interactions endpoint"""
         return web.json_response({
@@ -664,9 +677,22 @@ def run_bot():
     """Function to run the bot"""
     try:
         bot.run(DISCORD_TOKEN)
+    except discord.LoginFailure as e:
+        logger.error(f"Discord login failed - invalid token: {e}")
+        sys.exit(2)  # Authentication error
+    except discord.ConnectionClosed as e:
+        logger.error(f"Discord connection closed unexpectedly: {e}")
+        sys.exit(7)  # Connection error
+    except discord.HTTPException as e:
+        if e.status == 401:
+            logger.error(f"Discord authentication failed: {e}")
+            sys.exit(2)  # Authentication error
+        else:
+            logger.error(f"Discord HTTP error: {e}")
+            sys.exit(8)  # API error
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        raise
+        logger.error(f"Failed to start bot: {e}", exc_info=True)
+        sys.exit(1)  # General error
 
 if __name__ == "__main__":
     run_bot()

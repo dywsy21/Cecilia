@@ -18,25 +18,38 @@ class EssaySummarizer:
     """Handles essay summarization from ArXiv with subscription management"""
     
     def __init__(self):
-        self.arxiv_base_url = "https://export.arxiv.org/api/query"
-        self.ollama_url = "http://localhost:11434/api/generate"
-        self.data_dir = Path("data/essay_summarizer")
-        self.subscriptions_file = self.data_dir / "subscriptions.json"
-        self.processed_papers_dir = self.data_dir / "processed"
-        self.summaries_dir = self.data_dir / "summaries"
-        
-        # Create directories
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.processed_papers_dir.mkdir(parents=True, exist_ok=True)
-        self.summaries_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize subscriptions file if it doesn't exist
-        if not self.subscriptions_file.exists():
-            self._save_subscriptions({})
-        
-        self.app_manager = None  # Will be set by AppManager
-        logger.info("EssaySummarizer initialized")
-    
+        try:
+            self.arxiv_base_url = "https://export.arxiv.org/api/query"
+            self.ollama_url = "http://localhost:11434/api/generate"
+            self.data_dir = Path("data/essay_summarizer")
+            self.subscriptions_file = self.data_dir / "subscriptions.json"
+            self.processed_papers_dir = self.data_dir / "processed"
+            self.summaries_dir = self.data_dir / "summaries"
+            
+            # Create directories
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self.processed_papers_dir.mkdir(parents=True, exist_ok=True)
+            self.summaries_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Initialize subscriptions file if it doesn't exist
+            if not self.subscriptions_file.exists():
+                self._save_subscriptions({})
+            
+            self.app_manager = None  # Will be set by AppManager
+            logger.info("EssaySummarizer initialized")
+        except PermissionError as e:
+            logger.error(f"Permission denied creating data directories: {e}")
+            from ..apps import CeciliaServiceError
+            raise CeciliaServiceError(f"Cannot create data directories: {e}")
+        except OSError as e:
+            logger.error(f"OS error initializing EssaySummarizer: {e}")
+            from ..apps import CeciliaServiceError
+            raise CeciliaServiceError(f"System error initializing EssaySummarizer: {e}")
+        except Exception as e:
+            logger.error(f"Failed to initialize EssaySummarizer: {e}")
+            from ..apps import CeciliaServiceError
+            raise CeciliaServiceError(f"Cannot initialize EssaySummarizer: {e}")
+
     def set_app_manager(self, app_manager):
         """Set reference to AppManager for message pushing"""
         self.app_manager = app_manager
@@ -220,26 +233,26 @@ class EssaySummarizer:
                         
                         return summary
                     else:
-                        logger.error(f"Ollama API error: {response.status}")
+                        logger.error(f"ollama API error: {response.status}")
                         return None
                         
         except Exception as e:
-            logger.error(f"Error summarizing with Ollama: {e}")
+            logger.error(f"Error summarizing with ollama: {e}")
             return None
     
     async def check_ollama_service(self) -> bool:
-        """Check if Ollama service is running"""
+        """Check if ollama service is running"""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get("http://localhost:11434/api/tags", timeout=5) as response:
                     if response.status == 200:
-                        logger.info("Ollama service is running")
+                        logger.info("ollama service is running")
                         return True
                     else:
-                        logger.error("Ollama service returned non-200 status")
+                        logger.error("ollama service returned non-200 status")
                         return False
         except Exception as e:
-            logger.error(f"Ollama service check failed: {e}")
+            logger.error(f"ollama service check failed: {e}")
             return False
     
     def _get_paper_hash(self, paper_id: str) -> str:
@@ -398,21 +411,47 @@ class EssaySummarizer:
         ]
         return colors[index % len(colors)]
 
-    def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int) -> Dict:
+    def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int, only_new: bool = False) -> Dict:
         """Create header embed with summary statistics"""
         
         # Create description with processing stats
-        if new_count > 0 and cached_count > 0:
-            status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
-        elif new_count > 0:
-            status_text = f"🆕 全部新处理: {new_count} 篇"
-        elif cached_count > 0:
-            status_text = f"💾 全部来自缓存: {cached_count} 篇"
-        else:
-            status_text = f"📊 共找到: {total_papers} 篇"
-
-        description = f"""🔍 **搜索类别:** {category}
+        if only_new:
+            # For scheduled subscriptions, emphasize new papers only
+            if new_count > 0:
+                status_text = f"🆕 新发现论文: {new_count} 篇"
+                description = f"""🔍 **搜索类别:** {category}
 🎯 **搜索主题:** {topic}
+📅 **定时推送模式:** 仅显示新论文
+📈 **处理状态:** 
+{status_text}
+
+⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+📚 为您展示最新发现的论文总结..."""
+            else:
+                description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
+📅 **定时推送模式:** 仅显示新论文
+📈 **处理状态:** 
+📊 暂无新论文发现
+
+⏰ **检查时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+💡 所有相关论文均已在之前处理过，请等待新论文发布。"""
+        else:
+            # For instant requests, show all papers
+            if new_count > 0 and cached_count > 0:
+                status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
+            elif new_count > 0:
+                status_text = f"🆕 全部新处理: {new_count} 篇"
+            elif cached_count > 0:
+                status_text = f"💾 全部来自缓存: {cached_count} 篇"
+            else:
+                status_text = f"📊 共找到: {total_papers} 篇"
+
+            description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
+⚡ **即时查询模式:** 显示所有相关论文
 📈 **处理状态:** 
 {status_text}
 
@@ -423,7 +462,7 @@ class EssaySummarizer:
         embed = {
             "title": "🎯 ArXiv 论文总结报告",
             "description": description,
-            "color": "#2ecc71",
+            "color": "#2ecc71" if total_papers > 0 else "#95a5a6",
             "fields": [
                 {
                     "name": "📊 统计信息",
@@ -465,10 +504,10 @@ class EssaySummarizer:
                 logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
                 continue
 
-    async def summarize_and_push(self, category: str, topic: str, user_id: str = None) -> Dict:
+    async def summarize_and_push(self, category: str, topic: str, user_id: str = None, only_new: bool = False) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
-            logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id})")
+            logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id}, only_new: {only_new})")
             
             # Search for papers
             logger.info(f"Searching ArXiv for papers in category '{category}' on topic: '{topic}'")
@@ -481,11 +520,11 @@ class EssaySummarizer:
             for i, paper in enumerate(papers, 1):
                 logger.debug(f"Paper {i}: {paper['id']} - {paper['title'][:100]}...")
             
-            # Check Ollama service
-            logger.info("Checking Ollama service availability...")
+            # Check ollama service
+            logger.info("Checking ollama service availability...")
             if not await self.check_ollama_service():
-                logger.error("Ollama service check failed")
-                return {"success": False, "error": "Olloma service is not running. Please ensure olloma serve is running."}
+                logger.error("ollama service check failed")
+                return {"success": False, "error": "ollama service is not running. Please ensure ollama serve is running."}
             
             summarized_papers = []
             processed_count = 0
@@ -498,23 +537,31 @@ class EssaySummarizer:
                     
                     # Check if already processed
                     if self._is_paper_processed(paper_id):
-                        logger.info(f"Paper {paper_id} already processed, loading existing summary")
-                        existing_summary = await self._load_existing_summary(paper_id)
+                        logger.info(f"Paper {paper_id} already processed")
                         
-                        if existing_summary:
-                            # Add existing summary to results
-                            summarized_papers.append({
-                                'title': existing_summary['title'],
-                                'authors': existing_summary['authors'],
-                                'summary': existing_summary['summary'],
-                                'pdf_url': existing_summary.get('pdf_url', ''),
-                                'categories': existing_summary.get('categories', [])
-                            })
-                            reused_count += 1
-                            logger.info(f"Reused existing summary for paper {paper_id}")
+                        if only_new:
+                            # For scheduled subscriptions, skip already processed papers
+                            logger.info(f"Skipping already processed paper {paper_id} (only_new=True)")
                             continue
                         else:
-                            logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
+                            # For instant requests, include cached papers
+                            logger.info(f"Loading existing summary for paper {paper_id} (only_new=False)")
+                            existing_summary = await self._load_existing_summary(paper_id)
+                            
+                            if existing_summary:
+                                # Add existing summary to results
+                                summarized_papers.append({
+                                    'title': existing_summary['title'],
+                                    'authors': existing_summary['authors'],
+                                    'summary': existing_summary['summary'],
+                                    'pdf_url': existing_summary.get('pdf_url', ''),
+                                    'categories': existing_summary.get('categories', [])
+                                })
+                                reused_count += 1
+                                logger.info(f"Reused existing summary for paper {paper_id}")
+                                continue
+                            else:
+                                logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
                     
                     # Download PDF
                     logger.debug(f"Step 1/3: Downloading PDF for paper {paper_id}")
@@ -569,7 +616,7 @@ class EssaySummarizer:
                 
                 if user_id:
                     # Create header embed
-                    header_embed = self._create_summary_header_embed(category, topic, len(summarized_papers), processed_count, reused_count)
+                    header_embed = self._create_summary_header_embed(category, topic, len(summarized_papers), processed_count, reused_count, only_new)
                     
                     # Create individual paper embeds
                     paper_embeds = []
@@ -592,12 +639,24 @@ class EssaySummarizer:
                     "cached_papers": reused_count
                 }
             else:
-                logger.info(f"No papers could be processed for category '{category}', topic '{topic}'")
-                return {
-                    "success": False,
-                    "error": f"No papers could be processed for category '{category}', topic '{topic}' - all papers failed processing",
-                    "papers_count": 0
-                }
+                # Handle case where no papers are found (especially for only_new=True)
+                if only_new and processed_count == 0:
+                    logger.info(f"No new papers found for scheduled subscription: category '{category}', topic '{topic}'")
+                    return {
+                        "success": True,
+                        "message": f"No new papers found for category '{category}', topic '{topic}' - all papers already processed",
+                        "papers_count": 0,
+                        "new_papers": 0,
+                        "cached_papers": 0,
+                        "no_new_papers": True
+                    }
+                else:
+                    logger.info(f"No papers could be processed for category '{category}', topic '{topic}'")
+                    return {
+                        "success": False,
+                        "error": f"No papers could be processed for category '{category}', topic '{topic}' - all papers failed processing",
+                        "papers_count": 0
+                    }
                 
         except Exception as e:
             logger.error(f"Error in summarize_and_push for category '{category}', topic '{topic}': {e}")
@@ -605,139 +664,84 @@ class EssaySummarizer:
             return {"success": False, "error": str(e)}
     
     async def instantly_summarize_and_push(self, category: str, topic: str, user_id: str) -> Dict:
-        """Instantly summarize papers for a category and topic and push to user"""
-        result = await self.summarize_and_push(category, topic, user_id)
+        """Instantly summarize papers for a category and topic and push to user (includes cached papers)"""
+        result = await self.summarize_and_push(category, topic, user_id, only_new=False)
         return result
-    
-    # Subscription Management
-    def _load_subscriptions(self) -> Dict[str, List[Dict]]:
-        """Load subscriptions from disk"""
-        try:
-            with open(self.subscriptions_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # Handle migration from old format (list of strings) to new format (list of dicts)
-                migrated = False
-                for user_id, subscriptions in data.items():
-                    if subscriptions and isinstance(subscriptions[0], str):
-                        # Convert old format to new format
-                        data[user_id] = [{"category": "all", "topic": topic} for topic in subscriptions]
-                        migrated = True
-                        logger.info(f"Migrated subscriptions for user {user_id} from old format")
-                
-                if migrated:
-                    self._save_subscriptions(data)
-                    logger.info("Subscription migration completed")
-                
-                return data
-        except Exception as e:
-            logger.error(f"Error loading subscriptions: {e}")
-            return {}
-    
-    def _save_subscriptions(self, subscriptions: Dict[str, List[Dict]]):
-        """Save subscriptions to disk"""
-        try:
-            with open(self.subscriptions_file, 'w', encoding='utf-8') as f:
-                json.dump(subscriptions, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Error saving subscriptions: {e}")
-    
-    def _cleanup_invalid_subscriptions(self):
-        """Clean up invalid subscription records"""
-        try:
-            subscriptions = self._load_subscriptions()
-            cleaned = False
-            
-            for user_id, user_subscriptions in list(subscriptions.items()):
-                # Remove invalid subscription entries
-                valid_subscriptions = []
-                for sub in user_subscriptions:
-                    if isinstance(sub, dict) and 'category' in sub and 'topic' in sub:
-                        valid_subscriptions.append(sub)
-                    else:
-                        logger.info(f"Removing invalid subscription entry for user {user_id}: {sub}")
-                        cleaned = True
-                
-                subscriptions[user_id] = valid_subscriptions
-                
-                # Remove users with no valid subscriptions
-                if not valid_subscriptions:
-                    del subscriptions[user_id]
-                    logger.info(f"Removed user {user_id} with no valid subscriptions")
-                    cleaned = True
-            
-            if cleaned:
-                self._save_subscriptions(subscriptions)
-                logger.info("Subscription cleanup completed")
-            
-            return subscriptions
-        except Exception as e:
-            logger.error(f"Error during subscription cleanup: {e}")
-            return {}
-    
-    async def add_subscription(self, user_id: str, category: str, topic: str) -> str:
-        """Add a topic subscription for a user"""
-        subscriptions = self._cleanup_invalid_subscriptions()
-        
-        if user_id not in subscriptions:
-            subscriptions[user_id] = []
-        
-        # Check if subscription already exists
-        for existing_sub in subscriptions[user_id]:
-            if (existing_sub.get('category', '').lower() == category.lower() and 
-                existing_sub.get('topic', '').lower() == topic.lower()):
-                return f"❌ You're already subscribed to '{topic}' in category '{category}'"
-        
-        subscriptions[user_id].append({"category": category, "topic": topic})
-        self._save_subscriptions(subscriptions)
-        
-        return f"✅ Successfully subscribed to '{topic}' in category '{category}'. You'll receive daily summaries at 7:00 AM."
-    
-    async def remove_subscription(self, user_id: str, category: str, topic: str) -> str:
-        """Remove a topic subscription for a user"""
-        subscriptions = self._cleanup_invalid_subscriptions()
-        
-        if user_id not in subscriptions:
-            return f"❌ You have no subscriptions to remove."
-        
-        # Find and remove subscription
-        original_count = len(subscriptions[user_id])
-        subscriptions[user_id] = [
-            sub for sub in subscriptions[user_id]
-            if not (sub.get('category', '').lower() == category.lower() and 
-                   sub.get('topic', '').lower() == topic.lower())
-        ]
-        
-        if len(subscriptions[user_id]) == original_count:
-            return f"❌ You're not subscribed to '{topic}' in category '{category}'"
-        
-        self._save_subscriptions(subscriptions)
-        return f"✅ Successfully unsubscribed from '{topic}' in category '{category}'"
-    
-    async def list_subscriptions(self, user_id: str) -> str:
-        """List all subscriptions for a user"""
-        subscriptions = self._cleanup_invalid_subscriptions()
-        
-        if user_id not in subscriptions or not subscriptions[user_id]:
-            return "📝 You have no active subscriptions.\nUse `/subscribe add [category] [topic]` to add a subscription!"
-        
-        topics_list = []
-        for sub in subscriptions[user_id]:
-            category = sub.get('category', 'all')
-            topic = sub.get('topic', 'unknown')
-            topics_list.append(f"• **{category}** - {topic}")
-        
-        topics_text = "\n".join(topics_list)
-        
-        return f"""📚 **Your Research Subscriptions:**
-{topics_text}
 
-🕰️ Daily summaries are sent at 7:00 AM
-💡 Use `/subscribe add [category] [topic]` to add more subscriptions
-📝 Use `/subscribe remove [category] [topic]` to remove subscriptions"""
-    
+    def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int, only_new: bool = False) -> Dict:
+        """Create header embed with summary statistics"""
+        
+        # Create description with processing stats
+        if only_new:
+            # For scheduled subscriptions, emphasize new papers only
+            if new_count > 0:
+                status_text = f"🆕 新发现论文: {new_count} 篇"
+                description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
+📅 **定时推送模式:** 仅显示新论文
+📈 **处理状态:** 
+{status_text}
+
+⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+📚 为您展示最新发现的论文总结..."""
+            else:
+                description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
+📅 **定时推送模式:** 仅显示新论文
+📈 **处理状态:** 
+📊 暂无新论文发现
+
+⏰ **检查时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+💡 所有相关论文均已在之前处理过，请等待新论文发布。"""
+        else:
+            # For instant requests, show all papers
+            if new_count > 0 and cached_count > 0:
+                status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
+            elif new_count > 0:
+                status_text = f"🆕 全部新处理: {new_count} 篇"
+            elif cached_count > 0:
+                status_text = f"💾 全部来自缓存: {cached_count} 篇"
+            else:
+                status_text = f"📊 共找到: {total_papers} 篇"
+
+            description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
+⚡ **即时查询模式:** 显示所有相关论文
+📈 **处理状态:** 
+{status_text}
+
+⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
+
+📚 即将为您展示每篇论文的详细总结..."""
+
+        embed = {
+            "title": "🎯 ArXiv 论文总结报告",
+            "description": description,
+            "color": "#2ecc71" if total_papers > 0 else "#95a5a6",
+            "fields": [
+                {
+                    "name": "📊 统计信息",
+                    "value": f"📄 总论文数: **{total_papers}**\n🔄 处理状态: **完成**\n⚡ 响应时间: **实时**",
+                    "inline": True
+                },
+                {
+                    "name": "🛠️ 技术信息", 
+                    "value": "🤖 AI模型: **DeepSeek-R1-32B**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "Cecilia 研究助手 • 基于最新 ArXiv 数据"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return embed
+
     async def summarize_from_subscriptions(self):
-        """Process all subscriptions (called by scheduler)"""
+        """Process all subscriptions (called by scheduler) - only send new papers"""
         subscriptions = self._cleanup_invalid_subscriptions()
         
         for user_id, user_subscriptions in subscriptions.items():
@@ -750,17 +754,29 @@ class EssaySummarizer:
                         logger.warning(f"Skipping invalid subscription for user {user_id}: {subscription}")
                         continue
                     
-                    logger.info(f"Processing subscription: {category}/{topic} for user {user_id}")
-                    await self.summarize_and_push(category, topic, user_id)
+                    logger.info(f"Processing scheduled subscription: {category}/{topic} for user {user_id}")
+                    # Use only_new=True for scheduled subscriptions
+                    result = await self.summarize_and_push(category, topic, user_id, only_new=True)
+                    
+                    # Log the result but don't send anything if no new papers found
+                    if result.get('no_new_papers'):
+                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}, skipping notification")
+                    elif result['success']:
+                        logger.info(f"Sent {result['papers_count']} new papers to user {user_id} for {category}/{topic}")
+                    else:
+                        logger.error(f"Failed to process subscription {category}/{topic} for user {user_id}: {result.get('error')}")
+                    
                     # Add delay between processing to avoid rate limits
                     await asyncio.sleep(5)
                 except Exception as e:
                     logger.error(f"Error processing subscription {subscription} for user {user_id}: {e}")
                     continue
-    
     async def start_scheduler(self):
         """Start the daily scheduler for subscriptions"""
         logger.info("Starting subscription scheduler")
+        
+        max_consecutive_errors = 5
+        consecutive_errors = 0
         
         while True:
             try:
@@ -782,7 +798,20 @@ class EssaySummarizer:
                 await self.summarize_from_subscriptions()
                 logger.info("Daily subscription processing completed")
                 
+                # Reset error counter on successful run
+                consecutive_errors = 0
+                
+            except asyncio.CancelledError:
+                logger.info("Subscription scheduler cancelled")
+                break
             except Exception as e:
-                logger.error(f"Error in scheduler: {e}")
+                consecutive_errors += 1
+                logger.error(f"Error in scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Scheduler failed {max_consecutive_errors} consecutive times, giving up")
+                    from ..apps import CeciliaServiceError
+                    raise CeciliaServiceError(f"Subscription scheduler failed repeatedly: {e}")
+                
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)

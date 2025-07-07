@@ -226,19 +226,34 @@ class MessagePusher:
     
     async def start_server(self, port: int = 8011):
         """Start the HTTP server"""
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        logger.info(f"MessagePusher server started on port {port}")
-        
-        # Keep the server running
         try:
-            while True:
-                await asyncio.sleep(3600)  # Sleep for 1 hour
-        except asyncio.CancelledError:
-            logger.info("MessagePusher server stopping...")
-            await runner.cleanup()
+            runner = web.AppRunner(self.app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', port)
+            await site.start()
+            logger.info(f"MessagePusher server started on port {port}")
+            
+            # Keep the server running
+            try:
+                while True:
+                    await asyncio.sleep(3600)  # Sleep for 1 hour
+            except asyncio.CancelledError:
+                logger.info("MessagePusher server stopping...")
+                await runner.cleanup()
+                
+        except OSError as e:
+            if e.errno == 98:  # Address already in use
+                logger.error(f"Port {port} already in use - cannot start MessagePusher server")
+                from ..apps import CeciliaServiceError
+                raise CeciliaServiceError(f"Cannot bind to port {port} - address already in use")
+            else:
+                logger.error(f"OS error starting MessagePusher server: {e}")
+                from ..apps import CeciliaServiceError
+                raise CeciliaServiceError(f"System error starting MessagePusher server: {e}")
+        except Exception as e:
+            logger.error(f"Failed to start MessagePusher server: {e}")
+            from ..apps import CeciliaServiceError
+            raise CeciliaServiceError(f"Cannot start MessagePusher server: {e}")
 
 def create_message_pusher(bot_instance):
     """Factory function to create MessagePusher instance"""
