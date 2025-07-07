@@ -135,6 +135,72 @@ class EssaySummarizer:
         except Exception as e:
             logger.error(f"Error parsing ArXiv XML: {e}")
             return []
+            
+        # Subscription Management
+    def _load_subscriptions(self) -> Dict[str, List[Dict]]:
+        """Load subscriptions from disk"""
+        try:
+            with open(self.subscriptions_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+                # Handle migration from old format (list of strings) to new format (list of dicts)
+                migrated = False
+                for user_id, subscriptions in data.items():
+                    if subscriptions and isinstance(subscriptions[0], str):
+                        # Convert old format to new format
+                        data[user_id] = [{"category": "all", "topic": topic} for topic in subscriptions]
+                        migrated = True
+                        logger.info(f"Migrated subscriptions for user {user_id} from old format")
+                
+                if migrated:
+                    self._save_subscriptions(data)
+                    logger.info("Subscription migration completed")
+                
+                return data
+        except Exception as e:
+            logger.error(f"Error loading subscriptions: {e}")
+            return {}
+
+    def _save_subscriptions(self, subscriptions: Dict[str, List[Dict]]):
+        """Save subscriptions to disk"""
+        try:
+            with open(self.subscriptions_file, 'w', encoding='utf-8') as f:
+                json.dump(subscriptions, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error saving subscriptions: {e}")
+
+    def _cleanup_invalid_subscriptions(self):
+        """Clean up invalid subscription records"""
+        try:
+            subscriptions = self._load_subscriptions()
+            cleaned = False
+            
+            for user_id, user_subscriptions in list(subscriptions.items()):
+                # Remove invalid subscription entries
+                valid_subscriptions = []
+                for sub in user_subscriptions:
+                    if isinstance(sub, dict) and 'category' in sub and 'topic' in sub:
+                        valid_subscriptions.append(sub)
+                    else:
+                        logger.info(f"Removing invalid subscription entry for user {user_id}: {sub}")
+                        cleaned = True
+                
+                subscriptions[user_id] = valid_subscriptions
+                
+                # Remove users with no valid subscriptions
+                if not valid_subscriptions:
+                    del subscriptions[user_id]
+                    logger.info(f"Removed user {user_id} with no valid subscriptions")
+                    cleaned = True
+            
+            if cleaned:
+                self._save_subscriptions(subscriptions)
+                logger.info("Subscription cleanup completed")
+            
+            return subscriptions
+        except Exception as e:
+            logger.error(f"Error during subscription cleanup: {e}")
+            return {}
     
     async def download_pdf(self, pdf_url: str, paper_id: str) -> Optional[Path]:
         """Download PDF file from ArXiv"""
@@ -411,78 +477,6 @@ class EssaySummarizer:
         ]
         return colors[index % len(colors)]
 
-    def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int, only_new: bool = False) -> Dict:
-        """Create header embed with summary statistics"""
-        
-        # Create description with processing stats
-        if only_new:
-            # For scheduled subscriptions, emphasize new papers only
-            if new_count > 0:
-                status_text = f"🆕 新发现论文: {new_count} 篇"
-                description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-📅 **定时推送模式:** 仅显示新论文
-📈 **处理状态:** 
-{status_text}
-
-⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-📚 为您展示最新发现的论文总结..."""
-            else:
-                description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-📅 **定时推送模式:** 仅显示新论文
-📈 **处理状态:** 
-📊 暂无新论文发现
-
-⏰ **检查时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-💡 所有相关论文均已在之前处理过，请等待新论文发布。"""
-        else:
-            # For instant requests, show all papers
-            if new_count > 0 and cached_count > 0:
-                status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
-            elif new_count > 0:
-                status_text = f"🆕 全部新处理: {new_count} 篇"
-            elif cached_count > 0:
-                status_text = f"💾 全部来自缓存: {cached_count} 篇"
-            else:
-                status_text = f"📊 共找到: {total_papers} 篇"
-
-            description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-⚡ **即时查询模式:** 显示所有相关论文
-📈 **处理状态:** 
-{status_text}
-
-⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-📚 即将为您展示每篇论文的详细总结..."""
-
-        embed = {
-            "title": "🎯 ArXiv 论文总结报告",
-            "description": description,
-            "color": "#2ecc71" if total_papers > 0 else "#95a5a6",
-            "fields": [
-                {
-                    "name": "📊 统计信息",
-                    "value": f"📄 总论文数: **{total_papers}**\n🔄 处理状态: **完成**\n⚡ 响应时间: **实时**",
-                    "inline": True
-                },
-                {
-                    "name": "🛠️ 技术信息", 
-                    "value": "🤖 AI模型: **DeepSeek-R1-32B**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "Cecilia 研究助手 • 基于最新 ArXiv 数据"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        return embed
-
     async def _send_embeds_with_interval(self, user_id: str, embeds: List[Dict], interval: float = 2.0):
         """Send multiple embeds with time intervals to avoid rate limits"""
         
@@ -740,6 +734,67 @@ class EssaySummarizer:
         
         return embed
 
+    async def add_subscription(self, user_id: str, category: str, topic: str) -> str:
+        """Add a topic subscription for a user"""
+        subscriptions = self._cleanup_invalid_subscriptions()
+
+        if user_id not in subscriptions:
+            subscriptions[user_id] = []
+
+        # Check if subscription already exists
+        for existing_sub in subscriptions[user_id]:
+            if (existing_sub.get('category', '').lower() == category.lower() and 
+                existing_sub.get('topic', '').lower() == topic.lower()):
+                return f"❌ You're already subscribed to '{topic}' in category '{category}'"
+
+        subscriptions[user_id].append({"category": category, "topic": topic})
+        self._save_subscriptions(subscriptions)
+
+        return f"✅ Successfully subscribed to '{topic}' in category '{category}'. You'll receive daily summaries at 7:00 AM."
+
+    async def remove_subscription(self, user_id: str, category: str, topic: str) -> str:
+        """Remove a topic subscription for a user"""
+        subscriptions = self._cleanup_invalid_subscriptions()
+
+        if user_id not in subscriptions:
+            return f"❌ You have no subscriptions to remove."
+
+        # Find and remove subscription
+        original_count = len(subscriptions[user_id])
+        subscriptions[user_id] = [
+            sub for sub in subscriptions[user_id]
+            if not (sub.get('category', '').lower() == category.lower() and 
+                   sub.get('topic', '').lower() == topic.lower())
+        ]
+
+        if len(subscriptions[user_id]) == original_count:
+            return f"❌ You're not subscribed to '{topic}' in category '{category}'"
+
+        self._save_subscriptions(subscriptions)
+        return f"✅ Successfully unsubscribed from '{topic}' in category '{category}'"
+
+    async def list_subscriptions(self, user_id: str) -> str:
+        """List all subscriptions for a user"""
+        subscriptions = self._cleanup_invalid_subscriptions()
+
+        if user_id not in subscriptions or not subscriptions[user_id]:
+            return "📝 You have no active subscriptions.\nUse `/subscribe add [category] [topic]` to add a subscription!"
+
+        topics_list = []
+        for sub in subscriptions[user_id]:
+            category = sub.get('category', 'all')
+            topic = sub.get('topic', 'unknown')
+            topics_list.append(f"• **{category}** - {topic}")
+
+        topics_text = "\n".join(topics_list)
+        
+        return f"""📚 **Your Research Subscriptions:**
+{topics_text}
+
+🕰️ Daily summaries are sent at 7:00 AM
+💡 Use `/subscribe add [category] [topic]` to add more subscriptions
+📝 Use `/subscribe remove [category] [topic]` to remove subscriptions"""
+    
     async def summarize_from_subscriptions(self):
         """Process all subscriptions (called by scheduler) - only send new papers"""
         subscriptions = self._cleanup_invalid_subscriptions()
