@@ -41,16 +41,24 @@ class EssaySummarizer:
         """Set reference to AppManager for message pushing"""
         self.app_manager = app_manager
     
-    async def search_arxiv(self, topic: str, max_results: int = 10) -> List[Dict]:
-        """Search ArXiv for papers on a specific topic"""
+    async def search_arxiv(self, category: str, topic: str, max_results: int = 10) -> List[Dict]:
+        """Search ArXiv for papers on a specific category and topic"""
         try:
+            # Build search query based on category
+            if category.lower() == 'all':
+                search_query = f'all:{topic}'
+            else:
+                search_query = f'cat:{category} AND all:{topic}'
+            
             params = {
-                'search_query': f'all:{topic}',
+                'search_query': search_query,
                 'sortBy': 'lastUpdatedDate',
                 'sortOrder': 'descending',
                 'start': 0,
                 'max_results': max_results
             }
+            
+            logger.info(f"Searching ArXiv with query: {search_query}")
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.arxiv_base_url, params=params) as response:
@@ -307,7 +315,7 @@ class EssaySummarizer:
         else:
             return truncated + "..."
 
-    def _create_paper_embed(self, paper: Dict, index: int, total_count: int, topic: str) -> Dict:
+    def _create_paper_embed(self, paper: Dict, index: int, total_count: int, category: str, topic: str) -> Dict:
         """Create individual embed for a single paper with full utilization of embed limits"""
         
         # Prepare authors string
@@ -355,7 +363,7 @@ class EssaySummarizer:
                 }
             ],
             "footer": {
-                "text": f"主题: {topic} • Cecilia 研究助手 • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                "text": f"类别: {category} • 主题: {topic} • Cecilia 研究助手 • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             },
             "thumbnail": {
                 "url": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png"
@@ -380,7 +388,7 @@ class EssaySummarizer:
         ]
         return colors[index % len(colors)]
 
-    def _create_summary_header_embed(self, topic: str, total_papers: int, new_count: int, cached_count: int) -> Dict:
+    def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int) -> Dict:
         """Create header embed with summary statistics"""
         
         # Create description with processing stats
@@ -393,7 +401,8 @@ class EssaySummarizer:
         else:
             status_text = f"📊 共找到: {total_papers} 篇"
 
-        description = f"""🔍 **搜索主题:** {topic}
+        description = f"""🔍 **搜索类别:** {category}
+🎯 **搜索主题:** {topic}
 📈 **处理状态:** 
 {status_text}
 
@@ -446,19 +455,19 @@ class EssaySummarizer:
                 logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
                 continue
 
-    async def summarize_and_push(self, topic: str, user_id: str = None) -> Dict:
+    async def summarize_and_push(self, category: str, topic: str, user_id: str = None) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
-            logger.info(f"Starting summarization workflow for topic: '{topic}' (user: {user_id})")
+            logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id})")
             
             # Search for papers
-            logger.info(f"Searching ArXiv for papers on topic: '{topic}'")
-            papers = await self.search_arxiv(topic, max_results=10)
+            logger.info(f"Searching ArXiv for papers in category '{category}' on topic: '{topic}'")
+            papers = await self.search_arxiv(category, topic, max_results=10)
             if not papers:
-                logger.warning(f"No papers found for topic: '{topic}'")
-                return {"success": False, "error": f"No papers found for topic: {topic}"}
+                logger.warning(f"No papers found for category: '{category}', topic: '{topic}'")
+                return {"success": False, "error": f"No papers found for category: {category}, topic: {topic}"}
             
-            logger.info(f"Found {len(papers)} papers for topic '{topic}'")
+            logger.info(f"Found {len(papers)} papers for category '{category}', topic '{topic}'")
             for i, paper in enumerate(papers, 1):
                 logger.debug(f"Paper {i}: {paper['id']} - {paper['title'][:100]}...")
             
@@ -466,7 +475,7 @@ class EssaySummarizer:
             logger.info("Checking Ollama service availability...")
             if not await self.check_ollama_service():
                 logger.error("Ollama service check failed")
-                return {"success": False, "error": "Ollama service is not running. Please ensure ollama serve is running."}
+                return {"success": False, "error": "Olloma service is not running. Please ensure olloma serve is running."}
             
             summarized_papers = []
             processed_count = 0
@@ -550,12 +559,12 @@ class EssaySummarizer:
                 
                 if user_id:
                     # Create header embed
-                    header_embed = self._create_summary_header_embed(topic, len(summarized_papers), processed_count, reused_count)
+                    header_embed = self._create_summary_header_embed(category, topic, len(summarized_papers), processed_count, reused_count)
                     
                     # Create individual paper embeds
                     paper_embeds = []
                     for i, paper in enumerate(summarized_papers, 1):
-                        paper_embed = self._create_paper_embed(paper, i, len(summarized_papers), topic)
+                        paper_embed = self._create_paper_embed(paper, i, len(summarized_papers), category, topic)
                         paper_embeds.append(paper_embed)
                     
                     # Combine all embeds (header + papers)
@@ -567,40 +576,55 @@ class EssaySummarizer:
                 
                 return {
                     "success": True,
-                    "message": f"Found {len(summarized_papers)} papers for topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
+                    "message": f"Found {len(summarized_papers)} papers for category '{category}', topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
                     "papers_count": len(summarized_papers),
                     "new_papers": processed_count,
                     "cached_papers": reused_count
                 }
             else:
-                logger.info(f"No papers could be processed for topic '{topic}'")
+                logger.info(f"No papers could be processed for category '{category}', topic '{topic}'")
                 return {
                     "success": False,
-                    "error": f"No papers could be processed for topic '{topic}' - all papers failed processing",
+                    "error": f"No papers could be processed for category '{category}', topic '{topic}' - all papers failed processing",
                     "papers_count": 0
                 }
                 
         except Exception as e:
-            logger.error(f"Error in summarize_and_push for topic '{topic}': {e}")
+            logger.error(f"Error in summarize_and_push for category '{category}', topic '{topic}': {e}")
             logger.exception("Full traceback for summarize_and_push error:")
             return {"success": False, "error": str(e)}
     
-    async def instantly_summarize_and_push(self, topic: str, user_id: str) -> Dict:
-        """Instantly summarize papers for a topic and push to user"""
-        result = await self.summarize_and_push(topic, user_id)
+    async def instantly_summarize_and_push(self, category: str, topic: str, user_id: str) -> Dict:
+        """Instantly summarize papers for a category and topic and push to user"""
+        result = await self.summarize_and_push(category, topic, user_id)
         return result
     
     # Subscription Management
-    def _load_subscriptions(self) -> Dict[str, List[str]]:
+    def _load_subscriptions(self) -> Dict[str, List[Dict]]:
         """Load subscriptions from disk"""
         try:
             with open(self.subscriptions_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                
+                # Handle migration from old format (list of strings) to new format (list of dicts)
+                migrated = False
+                for user_id, subscriptions in data.items():
+                    if subscriptions and isinstance(subscriptions[0], str):
+                        # Convert old format to new format
+                        data[user_id] = [{"category": "all", "topic": topic} for topic in subscriptions]
+                        migrated = True
+                        logger.info(f"Migrated subscriptions for user {user_id} from old format")
+                
+                if migrated:
+                    self._save_subscriptions(data)
+                    logger.info("Subscription migration completed")
+                
+                return data
         except Exception as e:
             logger.error(f"Error loading subscriptions: {e}")
             return {}
     
-    def _save_subscriptions(self, subscriptions: Dict[str, List[str]]):
+    def _save_subscriptions(self, subscriptions: Dict[str, List[Dict]]):
         """Save subscriptions to disk"""
         try:
             with open(self.subscriptions_file, 'w', encoding='utf-8') as f:
@@ -608,63 +632,120 @@ class EssaySummarizer:
         except Exception as e:
             logger.error(f"Error saving subscriptions: {e}")
     
-    async def add_subscription(self, user_id: str, topic: str) -> str:
+    def _cleanup_invalid_subscriptions(self):
+        """Clean up invalid subscription records"""
+        try:
+            subscriptions = self._load_subscriptions()
+            cleaned = False
+            
+            for user_id, user_subscriptions in list(subscriptions.items()):
+                # Remove invalid subscription entries
+                valid_subscriptions = []
+                for sub in user_subscriptions:
+                    if isinstance(sub, dict) and 'category' in sub and 'topic' in sub:
+                        valid_subscriptions.append(sub)
+                    else:
+                        logger.info(f"Removing invalid subscription entry for user {user_id}: {sub}")
+                        cleaned = True
+                
+                subscriptions[user_id] = valid_subscriptions
+                
+                # Remove users with no valid subscriptions
+                if not valid_subscriptions:
+                    del subscriptions[user_id]
+                    logger.info(f"Removed user {user_id} with no valid subscriptions")
+                    cleaned = True
+            
+            if cleaned:
+                self._save_subscriptions(subscriptions)
+                logger.info("Subscription cleanup completed")
+            
+            return subscriptions
+        except Exception as e:
+            logger.error(f"Error during subscription cleanup: {e}")
+            return {}
+    
+    async def add_subscription(self, user_id: str, category: str, topic: str) -> str:
         """Add a topic subscription for a user"""
-        subscriptions = self._load_subscriptions()
+        subscriptions = self._cleanup_invalid_subscriptions()
         
         if user_id not in subscriptions:
             subscriptions[user_id] = []
         
-        if topic.lower() in [t.lower() for t in subscriptions[user_id]]:
-            return f"❌ You're already subscribed to '{topic}'"
+        # Check if subscription already exists
+        for existing_sub in subscriptions[user_id]:
+            if (existing_sub.get('category', '').lower() == category.lower() and 
+                existing_sub.get('topic', '').lower() == topic.lower()):
+                return f"❌ You're already subscribed to '{topic}' in category '{category}'"
         
-        subscriptions[user_id].append(topic)
+        subscriptions[user_id].append({"category": category, "topic": topic})
         self._save_subscriptions(subscriptions)
         
-        return f"✅ Successfully subscribed to '{topic}'. You'll receive daily summaries at 7:00 AM."
+        return f"✅ Successfully subscribed to '{topic}' in category '{category}'. You'll receive daily summaries at 7:00 AM."
     
-    async def remove_subscription(self, user_id: str, topic: str) -> str:
+    async def remove_subscription(self, user_id: str, category: str, topic: str) -> str:
         """Remove a topic subscription for a user"""
-        subscriptions = self._load_subscriptions()
+        subscriptions = self._cleanup_invalid_subscriptions()
         
         if user_id not in subscriptions:
             return f"❌ You have no subscriptions to remove."
         
-        # Find and remove topic (case insensitive)
-        original_topics = subscriptions[user_id][:]
-        subscriptions[user_id] = [t for t in subscriptions[user_id] if t.lower() != topic.lower()]
+        # Find and remove subscription
+        original_count = len(subscriptions[user_id])
+        subscriptions[user_id] = [
+            sub for sub in subscriptions[user_id]
+            if not (sub.get('category', '').lower() == category.lower() and 
+                   sub.get('topic', '').lower() == topic.lower())
+        ]
         
-        if len(subscriptions[user_id]) == len(original_topics):
-            return f"❌ You're not subscribed to '{topic}'"
+        if len(subscriptions[user_id]) == original_count:
+            return f"❌ You're not subscribed to '{topic}' in category '{category}'"
         
         self._save_subscriptions(subscriptions)
-        return f"✅ Successfully unsubscribed from '{topic}'"
+        return f"✅ Successfully unsubscribed from '{topic}' in category '{category}'"
     
     async def list_subscriptions(self, user_id: str) -> str:
         """List all subscriptions for a user"""
-        subscriptions = self._load_subscriptions()
+        subscriptions = self._cleanup_invalid_subscriptions()
         
         if user_id not in subscriptions or not subscriptions[user_id]:
-            return "📝 You have no active subscriptions.\nUse `/subscribe add [topic]` to add a subscription!"
+            return "📝 You have no active subscriptions.\nUse `/subscribe add [category] [topic]` to add a subscription!"
         
-        topics = subscriptions[user_id]
-        topics_list = "\n".join([f"• {topic}" for topic in topics])
+        topics_list = []
+        for sub in subscriptions[user_id]:
+            category = sub.get('category', 'all')
+            topic = sub.get('topic', 'unknown')
+            topics_list.append(f"• **{category}** - {topic}")
         
-        return f"📚 **Your Research Subscriptions:**\n{topics_list}\n\n🕰️ Daily summaries are sent at 7:00 AM"
+        topics_text = "\n".join(topics_list)
+        
+        return f"""📚 **Your Research Subscriptions:**
+{topics_text}
+
+🕰️ Daily summaries are sent at 7:00 AM
+💡 Use `/subscribe add [category] [topic]` to add more subscriptions
+📝 Use `/subscribe remove [category] [topic]` to remove subscriptions"""
     
     async def summarize_from_subscriptions(self):
         """Process all subscriptions (called by scheduler)"""
-        subscriptions = self._load_subscriptions()
+        subscriptions = self._cleanup_invalid_subscriptions()
         
-        for user_id, topics in subscriptions.items():
-            for topic in topics:
+        for user_id, user_subscriptions in subscriptions.items():
+            for subscription in user_subscriptions:
                 try:
-                    logger.info(f"Processing subscription: {topic} for user {user_id}")
-                    await self.summarize_and_push(topic, user_id)
+                    category = subscription.get('category', 'all')
+                    topic = subscription.get('topic', '')
+                    
+                    if not topic:
+                        logger.warning(f"Skipping invalid subscription for user {user_id}: {subscription}")
+                        continue
+                    
+                    logger.info(f"Processing subscription: {category}/{topic} for user {user_id}")
+                    await self.summarize_and_push(category, topic, user_id)
                     # Add delay between processing to avoid rate limits
                     await asyncio.sleep(5)
                 except Exception as e:
-                    logger.error(f"Error processing subscription {topic} for user {user_id}: {e}")
+                    logger.error(f"Error processing subscription {subscription} for user {user_id}: {e}")
                     continue
     
     async def start_scheduler(self):

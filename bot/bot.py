@@ -44,19 +44,6 @@ class CeciliaBot(commands.Bot):
                 "description": "Say hello to Cecilia!"
             },
             {
-                "name": "instantlyshow",
-                "type": 1,
-                "description": "Instantly summarize essays on ArXiv about a specific topic",
-                "options": [
-                    {
-                        "name": "topic",
-                        "description": "The research topic to search for",
-                        "type": 3,  # STRING
-                        "required": True
-                    }
-                ]
-            },
-            {
                 "name": "subscribe",
                 "type": 1,
                 "description": "Manage your research topic subscriptions",
@@ -69,12 +56,19 @@ class CeciliaBot(commands.Bot):
                         "choices": [
                             {"name": "list", "value": "list"},
                             {"name": "add", "value": "add"},
-                            {"name": "remove", "value": "remove"}
+                            {"name": "remove", "value": "remove"},
+                            {"name": "now", "value": "now"}
                         ]
                     },
                     {
+                        "name": "category",
+                        "description": "ArXiv category (e.g., cs, math, physics). Leave empty for 'all'",
+                        "type": 3,  # STRING
+                        "required": False
+                    },
+                    {
                         "name": "topic",
-                        "description": "Topic to add or remove (not needed for list)",
+                        "description": "Research topic/keyword",
                         "type": 3,  # STRING
                         "required": False
                     }
@@ -335,11 +329,14 @@ class CeciliaBot(commands.Bot):
                     # Get parameters
                     options = command_data.get('options', [])
                     action = None
+                    category = None
                     topic = None
                     
                     for option in options:
                         if option.get('name') == 'action':
                             action = option.get('value')
+                        elif option.get('name') == 'category':
+                            category = option.get('value')
                         elif option.get('name') == 'topic':
                             topic = option.get('value')
                     
@@ -347,7 +344,7 @@ class CeciliaBot(commands.Bot):
                         return web.json_response({
                             'type': 4,
                             'data': {
-                                'content': 'Please specify an action (list, add, or remove)!'
+                                'content': 'Please specify an action (list, add, remove, or now)!'
                             }
                         })
                     
@@ -355,11 +352,31 @@ class CeciliaBot(commands.Bot):
                     user_id = user.get('id')
                     
                     # Handle subscription management
-                    asyncio.create_task(self.handle_subscribe_command(data, action, topic, user_id))
-                    
-                    return web.json_response({
-                        'type': 5,  # Deferred response
-                    })
+                    if action == 'now':
+                        # Instant show functionality
+                        if not topic:
+                            return web.json_response({
+                                'type': 4,
+                                'data': {
+                                    'content': 'Please provide a topic for instant search!'
+                                }
+                            })
+                        
+                        asyncio.create_task(self.handle_instantly_show_command(data, category or 'all', topic, user_id))
+                        
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': f'🔄 Processing... Analyzing latest papers on "{category or "all"}.{topic}". Results will be sent to you shortly!'
+                            }
+                        })
+                    else:
+                        # Regular subscription management
+                        asyncio.create_task(self.handle_subscribe_command(data, action, category, topic, user_id))
+                        
+                        return web.json_response({
+                            'type': 5,  # Deferred response
+                        })
 
                 else:
                     return web.json_response({
@@ -444,7 +461,7 @@ class CeciliaBot(commands.Bot):
                 'flags': 64
             })
 
-    async def handle_subscribe_command(self, interaction_data, action, topic, user_id):
+    async def handle_subscribe_command(self, interaction_data, action, category, topic, user_id):
         """Handle subscription management command"""
         try:
             if action == 'list':
@@ -453,14 +470,14 @@ class CeciliaBot(commands.Bot):
                 if not topic:
                     result = "❌ Please provide a topic to add to your subscriptions!"
                 else:
-                    result = await self.app_manager.essay_summarizer.add_subscription(user_id, topic)
+                    result = await self.app_manager.essay_summarizer.add_subscription(user_id, category or 'all', topic)
             elif action == 'remove':
                 if not topic:
                     result = "❌ Please provide a topic to remove from your subscriptions!"
                 else:
-                    result = await self.app_manager.essay_summarizer.remove_subscription(user_id, topic)
+                    result = await self.app_manager.essay_summarizer.remove_subscription(user_id, category or 'all', topic)
             else:
-                result = "❌ Invalid action. Use 'list', 'add', or 'remove'."
+                result = "❌ Invalid action. Use 'list', 'add', 'remove', or 'now'."
             
             # Send followup response
             await self.send_followup_response(interaction_data, {
@@ -473,44 +490,19 @@ class CeciliaBot(commands.Bot):
                 'content': f'❌ Sorry, there was an error: {str(e)}'
             })
 
-    async def _send_error_via_api(self, user_id: str, error_message: str):
-        """Send error message via HTTP API to message pusher"""
-        try:
-            url = "http://localhost:8011/push"
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "user_id": str(user_id),
-                "channel_id": "1190649951693316169",
-                "message": {
-                    "content": error_message
-                }
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        logger.info(f"Error message sent successfully via API: {result}")
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Failed to send error message via API {response.status}: {error_text}")
-                        
-        except Exception as e:
-            logger.error(f"Error calling message pusher API for error message: {e}")
-
-    async def handle_instantly_show_command(self, interaction_data, topic, user_id):
+    async def handle_instantly_show_command(self, interaction_data, category, topic, user_id):
         """Handle instantly show command with message pusher"""
         try:
             # Start the summarization process
-            result = await self.app_manager.essay_summarizer.instantly_summarize_and_push(topic, user_id)
+            result = await self.app_manager.essay_summarizer.instantly_summarize_and_push(category, topic, user_id)
             
             # The result is sent via message pusher, so we don't need to send a followup
-            logger.info(f"Instantly show command completed for topic: {topic}")
+            logger.info(f"Instantly show command completed for category: {category}, topic: {topic}")
             
         except Exception as e:
             logger.error(f"Error in instantly show command: {e}")
             # Send error via message pusher API
-            error_message = f"❌ Sorry, there was an error processing your request for '{topic}': {str(e)}"
+            error_message = f"❌ Sorry, there was an error processing your request for '{topic}' in category '{category}': {str(e)}"
             await self._send_error_via_api(user_id, error_message)
 
     async def send_followup_response(self, interaction_data, response_data):
@@ -670,6 +662,14 @@ async def test_message(interaction: discord.Interaction):
 
 def run_bot():
     """Function to run the bot"""
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        raise
+
+if __name__ == "__main__":
+    run_bot()
     try:
         bot.run(DISCORD_TOKEN)
     except Exception as e:
