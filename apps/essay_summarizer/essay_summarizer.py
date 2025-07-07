@@ -45,10 +45,11 @@ class EssaySummarizer:
         """Search ArXiv for papers on a specific category and topic"""
         try:
             # Build search query based on category
-            if category.lower() == 'all':
-                search_query = f'all:{topic}'
-            else:
-                search_query = f'cat:{category} AND all:{topic}'
+            # if category.lower() == 'all':
+            #     search_query = f'all:{topic}'
+            # else:
+            #     search_query = f'cot:{category} AND all:{topic}'
+            search_query = f'{category if category else 'all'}.{topic}'
             
             params = {
                 'search_query': search_query,
@@ -188,7 +189,16 @@ class EssaySummarizer:
 论文标题：{paper_title}
 
 论文内容：
-{paper_content[:18000]}"""
+{paper_content[:15000]}
+
+再重申一次，请为这篇研究论文提供清晰简洁的总结。重点关注：
+1. 主要研究问题或问题
+2. 关键方法或途径
+3. 主要发现或贡献
+4. 实际意义或应用
+
+总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
+"""
 
             payload = {
                 "model": "deepseek-r1:32b",
