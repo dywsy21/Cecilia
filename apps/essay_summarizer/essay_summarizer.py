@@ -268,7 +268,7 @@ class EssaySummarizer:
                 logger.info(f"Removing invalid/incomplete PDF: {pdf_path}")
                 pdf_path.unlink()
             
-            max_retries = 4
+            max_retries = 5
             timeout_seconds = 20
             
             for attempt in range(max_retries):
@@ -321,7 +321,7 @@ class EssaySummarizer:
                 
                 # Wait before retry (exponential backoff)
                 if attempt < max_retries - 1:
-                    wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s
+                    wait_time = 2 ** (attempt)  # 1s, 2s, 4s
                     logger.info(f"Waiting {wait_time}s before retry...")
                     await asyncio.sleep(wait_time)
             
