@@ -100,10 +100,14 @@ class EmailService:
                         {paper['summary'].replace('\n', '<br>')}
                     </div>
                     <div style="text-align: center; margin-top: 15px;">
-                        <a href="{paper.get('pdf_url', '#')}" class="paper-link" target="_blank">📖 阅读原文</a>
+                        <a href="{paper.get('pdf_url', '#')}" style="background: #3498db; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-size: 14px; display: inline-block;" target="_blank">📖 阅读原文</a>
                     </div>
                 </div>
                 """
+                
+                # 在最后一篇论文之后不添加分界线
+                if i < len(papers):
+                    html += '<hr style="border: none; border-top: 2px solid #e0e0e0; margin: 30px 20px; opacity: 0.6;">'
         else:
             html += """
             <div class="no-papers">
