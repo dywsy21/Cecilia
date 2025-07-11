@@ -2,9 +2,12 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime
+from pathlib import Path
+import re
 from bot.auths import (
     EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_SMTP_SECURE,
     EMAIL_SMTP_USER, EMAIL_SMTP_PASS, EMAIL_SMTP_NAME,
@@ -39,6 +42,45 @@ class EmailService:
             logger.error("Email configuration incomplete")
             return False
         return True
+    
+    def _sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename for safe file system usage"""
+        # Remove or replace invalid characters for file names
+        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Remove excessive whitespace and limit length
+        filename = re.sub(r'\s+', ' ', filename).strip()
+        # Limit filename length (keeping some buffer for extension)
+        if len(filename) > 200:
+            filename = filename[:200] + "..."
+        return filename
+    
+    def _get_paper_pdf_path(self, paper_url: str) -> Optional[Path]:
+        """Get the PDF path for a paper from its ArXiv URL"""
+        try:
+            # Extract paper ID from URL (e.g., "http://arxiv.org/pdf/2101.00001v1" -> "2101.00001v1")
+            if 'arxiv.org/pdf/' in paper_url:
+                paper_id = paper_url.split('arxiv.org/pdf/')[-1]
+                if paper_id.endswith('.pdf'):
+                    paper_id = paper_id[:-4]
+            else:
+                # Handle other URL formats
+                paper_id = paper_url.split('/')[-1]
+                if paper_id.endswith('.pdf'):
+                    paper_id = paper_id[:-4]
+            
+            # Look for the PDF in the processed papers directory
+            processed_papers_dir = Path("data/essay_summarizer/processed")
+            pdf_path = processed_papers_dir / f"{paper_id}.pdf"
+            
+            if pdf_path.exists():
+                return pdf_path
+            else:
+                logger.warning(f"PDF not found for paper: {paper_id} at {pdf_path}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting PDF path for {paper_url}: {e}")
+            return None
     
     def _create_email_html(self, category: str, topic: str, papers: List[Dict], stats: Dict) -> str:
         """Create HTML email content for paper summaries"""
@@ -136,7 +178,7 @@ class EmailService:
                                      topic: str, 
                                      papers: List[Dict], 
                                      stats: Dict) -> Dict:
-        """Send paper summary email to multiple recipients"""
+        """Send paper summary email to multiple recipients with PDF attachments"""
         if not self._validate_config():
             return {"success": False, "error": "Email configuration is incomplete"}
         
@@ -144,14 +186,56 @@ class EmailService:
             subject = f"Cecilia 研究推送: {category}.{topic} - {len(papers)}篇论文 ({datetime.now().strftime('%m月%d日')})"
             html_content = self._create_email_html(category, topic, papers, stats)
             
-            msg = MIMEMultipart('alternative')
+            msg = MIMEMultipart('mixed')  # Changed to 'mixed' for attachments
             msg['Subject'] = subject
             msg['From'] = f"{self.smtp_name} <{self.smtp_user}>" if self.smtp_name else self.smtp_user
             msg['To'] = ', '.join(to_emails)
             
+            # Create the main email body
+            body_part = MIMEMultipart('alternative')
             html_part = MIMEText(html_content, 'html', 'utf-8')
-            msg.attach(html_part)
+            body_part.attach(html_part)
+            msg.attach(body_part)
             
+            # Add PDF attachments
+            attached_count = 0
+            for i, paper in enumerate(papers, 1):
+                try:
+                    pdf_url = paper.get('pdf_url', '')
+                    if not pdf_url:
+                        logger.warning(f"No PDF URL for paper {i}: {paper.get('title', 'Unknown')}")
+                        continue
+                    
+                    pdf_path = self._get_paper_pdf_path(pdf_url)
+                    if not pdf_path:
+                        logger.warning(f"PDF file not found for paper {i}: {paper.get('title', 'Unknown')}")
+                        continue
+                    
+                    # Create sanitized filename with paper number and title
+                    paper_title = paper.get('title', 'Unknown Paper')
+                    sanitized_title = self._sanitize_filename(paper_title)
+                    attachment_filename = f"{i}. {sanitized_title}.pdf"
+                    
+                    # Read and attach the PDF
+                    with open(pdf_path, 'rb') as pdf_file:
+                        pdf_data = pdf_file.read()
+                    
+                    pdf_attachment = MIMEApplication(pdf_data, _subtype='pdf')
+                    pdf_attachment.add_header(
+                        'Content-Disposition',
+                        'attachment',
+                        filename=attachment_filename
+                    )
+                    
+                    msg.attach(pdf_attachment)
+                    attached_count += 1
+                    logger.info(f"Attached PDF {i}: {attachment_filename}")
+                    
+                except Exception as e:
+                    logger.error(f"Error attaching PDF for paper {i} ({paper.get('title', 'Unknown')}): {e}")
+                    continue
+            
+            # Send the email
             if self.smtp_secure:
                 context = ssl.create_default_context()
                 if self.ignore_tls:
@@ -181,12 +265,13 @@ class EmailService:
                     server.login(self.smtp_user, self.smtp_pass)
                     server.send_message(msg)
             
-            logger.info(f"Email sent successfully to {len(to_emails)} recipients for {category}.{topic}")
+            logger.info(f"Email sent successfully to {len(to_emails)} recipients for {category}.{topic} with {attached_count} PDF attachments")
             return {
                 "success": True, 
-                "message": f"Email sent to {len(to_emails)} recipients",
+                "message": f"Email sent to {len(to_emails)} recipients with {attached_count} PDF attachments",
                 "recipients": to_emails,
-                "subject": subject
+                "subject": subject,
+                "attachments": attached_count
             }
             
         except Exception as e:
