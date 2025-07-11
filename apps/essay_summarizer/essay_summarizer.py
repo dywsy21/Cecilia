@@ -11,6 +11,7 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
+from ..email_service.email_service import EmailService
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class EssaySummarizer:
             self.ollama_url = "http://localhost:11434/api/generate"
             self.data_dir = Path("data/essay_summarizer")
             self.subscriptions_file = self.data_dir / "subscriptions.json"
+            self.email_targets_file = self.data_dir / "email_targets.json"
             self.processed_papers_dir = self.data_dir / "processed"
             self.summaries_dir = self.data_dir / "summaries"
             
@@ -35,8 +37,13 @@ class EssaySummarizer:
             if not self.subscriptions_file.exists():
                 self._save_subscriptions({})
             
+            # Initialize email targets file if it doesn't exist
+            if not self.email_targets_file.exists():
+                self._save_email_targets([])
+            
             self.app_manager = None  # Will be set by AppManager
-            logger.info("EssaySummarizer initialized")
+            self.email_service = EmailService()
+            logger.info("EssaySummarizer initialized with email support")
         except PermissionError as e:
             logger.error(f"Permission denied creating data directories: {e}")
             from ..apps import CeciliaServiceError
@@ -135,8 +142,24 @@ class EssaySummarizer:
         except Exception as e:
             logger.error(f"Error parsing ArXiv XML: {e}")
             return []
-            
-        # Subscription Management
+    
+    def _load_email_targets(self) -> List[str]:
+        """Load email targets from disk"""
+        try:
+            with open(self.email_targets_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading email targets: {e}")
+            return []
+
+    def _save_email_targets(self, email_targets: List[str]):
+        """Save email targets to disk"""
+        try:
+            with open(self.email_targets_file, 'w', encoding='utf-8') as f:
+                json.dump(email_targets, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error saving email targets: {e}")
+
     def _load_subscriptions(self) -> Dict[str, List[Dict]]:
         """Load subscriptions from disk"""
         try:
@@ -796,8 +819,11 @@ class EssaySummarizer:
 📝 Use `/subscribe remove [category] [topic]` to remove subscriptions"""
     
     async def summarize_from_subscriptions(self):
-        """Process all subscriptions (called by scheduler) - only send new papers"""
+        """Process all subscriptions (called by scheduler) - only send new papers and emails"""
         subscriptions = self._cleanup_invalid_subscriptions()
+        email_targets = self._load_email_targets()
+        
+        logger.info(f"Starting scheduled subscription processing for {len(subscriptions)} users and {len(email_targets)} email targets")
         
         for user_id, user_subscriptions in subscriptions.items():
             for subscription in user_subscriptions:
@@ -813,9 +839,47 @@ class EssaySummarizer:
                     # Use only_new=True for scheduled subscriptions
                     result = await self.summarize_and_push(category, topic, user_id, only_new=True)
                     
-                    # Log the result but don't send anything if no new papers found
+                    # Send email after processing each topic (regardless of whether there are new papers)
+                    if email_targets:
+                        try:
+                            # Get papers for email (including cached if no new papers found)
+                            email_papers = []
+                            email_stats = result.copy()
+                            
+                            if result.get('no_new_papers') and result.get('papers_count', 0) == 0:
+                                # If no new papers, get some recent papers for email context
+                                logger.info(f"No new papers for {category}/{topic}, fetching recent papers for email")
+                                email_result = await self.summarize_and_push(category, topic, None, only_new=False)
+                                if email_result['success']:
+                                    # Get the actual paper data from the recent processing
+                                    recent_papers = await self._get_recent_papers_for_email(category, topic, max_papers=3)
+                                    email_papers = recent_papers
+                                    email_stats.update({
+                                        'papers_count': len(recent_papers),
+                                        'new_papers': 0,
+                                        'cached_papers': len(recent_papers)
+                                    })
+                            
+                            # Send email to all targets
+                            email_result = await self.email_service.send_paper_summary_email(
+                                to_emails=email_targets,
+                                category=category,
+                                topic=topic,
+                                papers=email_papers,
+                                stats=email_stats
+                            )
+                            
+                            if email_result['success']:
+                                logger.info(f"Email sent successfully for {category}/{topic} to {len(email_targets)} recipients")
+                            else:
+                                logger.error(f"Failed to send email for {category}/{topic}: {email_result.get('error')}")
+                                
+                        except Exception as e:
+                            logger.error(f"Error sending email for subscription {category}/{topic}: {e}")
+                    
+                    # Log the Discord result
                     if result.get('no_new_papers'):
-                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}, skipping notification")
+                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}, skipping Discord notification")
                     elif result['success']:
                         logger.info(f"Sent {result['papers_count']} new papers to user {user_id} for {category}/{topic}")
                     else:
@@ -826,6 +890,36 @@ class EssaySummarizer:
                 except Exception as e:
                     logger.error(f"Error processing subscription {subscription} for user {user_id}: {e}")
                     continue
+
+    async def _get_recent_papers_for_email(self, category: str, topic: str, max_papers: int = 3) -> List[Dict]:
+        """Get recent papers for email when no new papers are found"""
+        try:
+            # Search for recent papers
+            papers = await self.search_arxiv(category, topic, max_results=max_papers)
+            recent_summaries = []
+            
+            for paper in papers:
+                paper_id = paper['id']
+                existing_summary = await self._load_existing_summary(paper_id)
+                
+                if existing_summary:
+                    recent_summaries.append({
+                        'title': existing_summary['title'],
+                        'authors': existing_summary['authors'],
+                        'summary': existing_summary['summary'],
+                        'pdf_url': existing_summary.get('pdf_url', ''),
+                        'categories': existing_summary.get('categories', [])
+                    })
+                
+                if len(recent_summaries) >= max_papers:
+                    break
+            
+            return recent_summaries
+            
+        except Exception as e:
+            logger.error(f"Error getting recent papers for email: {e}")
+            return []
+
     async def start_scheduler(self):
         """Start the daily scheduler for subscriptions"""
         logger.info("Starting subscription scheduler")
