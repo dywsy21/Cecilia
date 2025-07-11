@@ -243,8 +243,8 @@ SummarizeAndPush(topic):
 ```
 SummarizeFromSubscription():
     for each topic in subscribed topics:
-        SummarizeAndPush(topic)  # Send to Discord users
-        SendEmailNotification(topic)  # Send to email recipients
+        SummarizeAndPush(topic)        # Send to Discord users
+        SendEmailNotification(topic)   # Send to email recipients
 
 Every 07:00 a.m. in the morning:
     SummarizeFromSubscription()
@@ -309,21 +309,6 @@ Handles Discord slash command interactions via webhook with proper signature ver
    ```
 
 7. **Configure Discord Application:**
-   - Set interactions endpoint URL to: `https://dywsy21.cn:18080/bot/interactions`
+   - Set interactions endpoint URL to your own interaction endpoint on discord dev website
    - Enable necessary bot permissions and scopes
    - Ensure PUBLIC_KEY is correctly set in auths.py
-
-## Testing
-
-### Email Service Testing
-
-Test the email notification system:
-
-```bash
-# Run comprehensive email tests
-python test.py
-```
-
-
-
-
