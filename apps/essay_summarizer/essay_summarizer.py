@@ -21,7 +21,7 @@ class EssaySummarizer:
     def __init__(self):
         try:
             self.arxiv_base_url = "https://export.arxiv.org/api/query"
-            self.ollama_url = "http://localhost:11434/api/generate"
+            self.ollima_url = "http://localhost:11434/api/generate"
             self.data_dir = Path("data/essay_summarizer")
             self.subscriptions_file = self.data_dir / "subscriptions.json"
             self.email_targets_file = self.data_dir / "email_targets.json"
@@ -231,14 +231,42 @@ class EssaySummarizer:
             logger.error(f"Error during subscription cleanup: {e}")
             return {}
     
+    def _is_valid_pdf(self, pdf_path: Path) -> bool:
+        """Check if a PDF file is valid by examining its header and basic structure"""
+        try:
+            if not pdf_path.exists() or pdf_path.stat().st_size < 100:  # Too small to be a valid PDF
+                return False
+            
+            with open(pdf_path, 'rb') as f:
+                # Check PDF header
+                header = f.read(10)
+                if not header.startswith(b'%PDF-'):
+                    return False
+                
+                # Check if file has EOF marker (basic structure validation)
+                f.seek(-100, 2)  # Go to last 100 bytes
+                tail = f.read()
+                if b'%%EOF' not in tail:
+                    return False
+                
+            return True
+        except Exception as e:
+            logger.warning(f"Error validating PDF {pdf_path}: {e}")
+            return False
+    
     async def download_pdf(self, pdf_url: str, paper_id: str) -> Optional[Path]:
         """Download PDF file from ArXiv with timeout and retry logic"""
+        pdf_path = self.processed_papers_dir / f"{paper_id}.pdf"
         try:
-            pdf_path = self.processed_papers_dir / f"{paper_id}.pdf"
-            
-            # Check if already downloaded
-            if pdf_path.exists():
+            # Check if already downloaded and valid
+            if pdf_path.exists() and self._is_valid_pdf(pdf_path):
+                logger.info(f"Valid PDF already exists: {pdf_path}")
                 return pdf_path
+            
+            # Remove existing invalid PDF if present
+            if pdf_path.exists():
+                logger.info(f"Removing invalid/incomplete PDF: {pdf_path}")
+                pdf_path.unlink()
             
             max_retries = 4
             timeout_seconds = 20
@@ -254,8 +282,19 @@ class EssaySummarizer:
                                 async with aiofiles.open(pdf_path, 'wb') as f:
                                     async for chunk in response.content.iter_chunked(8192):
                                         await f.write(chunk)
-                                logger.info(f"Successfully downloaded PDF: {pdf_path} (attempt {attempt + 1})")
-                                return pdf_path
+                                
+                                # Validate the downloaded PDF
+                                if self._is_valid_pdf(pdf_path):
+                                    logger.info(f"Successfully downloaded and validated PDF: {pdf_path} (attempt {attempt + 1})")
+                                    return pdf_path
+                                else:
+                                    logger.warning(f"Downloaded PDF is invalid on attempt {attempt + 1} for {paper_id}")
+                                    # Remove invalid PDF before retry
+                                    if pdf_path.exists():
+                                        pdf_path.unlink()
+                                    if attempt == max_retries - 1:
+                                        logger.error(f"Failed to download valid PDF after {max_retries} attempts")
+                                        return None
                             else:
                                 logger.warning(f"HTTP {response.status} on attempt {attempt + 1} for {paper_id}")
                                 if attempt == max_retries - 1:
@@ -264,12 +303,18 @@ class EssaySummarizer:
                                 
                 except asyncio.TimeoutError:
                     logger.warning(f"Download timeout ({timeout_seconds}s) on attempt {attempt + 1} for {paper_id}")
+                    # Remove partial download if exists
+                    if pdf_path.exists():
+                        pdf_path.unlink()
                     if attempt == max_retries - 1:
                         logger.error(f"Failed to download PDF after {max_retries} attempts: timeout")
                         return None
                     
                 except aiohttp.ClientError as e:
                     logger.warning(f"Client error on attempt {attempt + 1} for {paper_id}: {e}")
+                    # Remove partial download if exists
+                    if pdf_path.exists():
+                        pdf_path.unlink()
                     if attempt == max_retries - 1:
                         logger.error(f"Failed to download PDF after {max_retries} attempts: {e}")
                         return None
@@ -284,6 +329,12 @@ class EssaySummarizer:
                         
         except Exception as e:
             logger.error(f"Unexpected error downloading PDF for {paper_id}: {e}")
+            # Clean up any partial download
+            if 'pdf_path' in locals() and pdf_path.exists():
+                try:
+                    pdf_path.unlink()
+                except:
+                    pass
             return None
     
     async def pdf_to_markdown(self, pdf_path: Path) -> Optional[str]:
@@ -345,7 +396,7 @@ class EssaySummarizer:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.olloma_url, json=payload) as response:
+                async with session.post(self.ollima_url, json=payload) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = result.get('response', '')
@@ -358,7 +409,7 @@ class EssaySummarizer:
                         
                         return summary
                     else:
-                        logger.error(f"ollama API error: {response.status}")
+                        logger.error(f"ollima API error: {response.status}")
                         return None
                         
         except Exception as e:
