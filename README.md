@@ -7,21 +7,26 @@ A Discord bot deployable on server with message pushing capabilities!
 ## Structure
 
 The bot runs multiple services:
+
 - **Port 8010**: Discord interactions webhook endpoint (accessible via `/bot`)
 - **Port 8011**: Internal message pusher (localhost only)
 
 File structure:
+
 - `bot`: Discord bot integration and interactions handling
 - `apps`: Backend functionalities
   - `msg_pusher`: Internal message pushing service
-  - `essay_summarizer`: ArXiv paper summarization
+  - `email_service`: SMTP email service for automated notifications
+  - `essay_summarizer`: ArXiv paper summarization subscription service
 
 ## Services
 
 ### Discord Bot
+
 Handles slash commands and Discord API interactions via webhook.
 
 **Available Commands:**
+
 - `/hello` - Greet the bot
 - `/status` - Check bot status
 - `/get_my_id` - Get your Discord IDs for testing
@@ -35,7 +40,20 @@ Accepts HTTP POST requests from other server processes to send Discord messages.
 
 **Internal API Endpoint:** `http://localhost:8011/push`
 
-**JSON Format:**: See `apps/msg_pusher/schema.py`
+Other services on your server can send messages through Cecilia Bot via curl-ing 8011 port:
+
+```bash
+curl -X POST http://localhost:8011/push \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "USER_DISCORD_ID",
+    "message": {
+      "content": "Hello from internal service!"
+    }
+  }'
+```
+
+**Complete JSON Schema:** To know the complete supported JSON Format, see `apps/msg_pusher/schema.py`.
 
 ### Essay Summarizer Services
 
@@ -45,12 +63,73 @@ This service lets the user subscribe to a specific field of academic researches 
 
 #### Subscription & Registered Commands
 
-The subscribed topics' Summarizing work will begin every 07:00 am in the morning, and once done, results will be pushed to the user **via Message Pusher**.
+The subscribed topics' Summarizing work will begin every 07:00 am in the morning, and once done, results will be pushed to the user **via Message Pusher** and **via Email** (if configured).
 
 1. `/subscribe list`: list all subscribed topics
-2. `/subscribe add [TOPIC]`: add a specific topic to subscription. The topics added will be stored on the disk.
-3. `/subscribe remove [TOPIC]`: remove this subscription.
-4. `/instantlyshow [TOPIC]`: instantly start an Essay Summarizer job on the given topic, reply to the user with "Processing..." and push the results to the user via the Message Pusher once done.
+2. `/subscribe add [CATEGORY] [TOPIC]`: add a specific topic to subscription. The topics added will be stored on the disk. 
+3. `/subscribe remove [CATEGORY] [TOPIC]`: remove this subscription.
+4. `/subscribe now [CATEGORY] [TOPIC]`: instantly start an Essay Summarizer job on the given topic, reply to the user with "Processing..." and push the results to the user via the Message Pusher once done. Specially, /subscribe now will push you all 10 essays regardless of whether they have been sent to the user before.
+
+An example of '[CATEGORY].[TOPIC]' will be 'cs.ai'.
+
+#### Email Notification System
+
+**Configuration:** The system supports automated email notifications for research updates.
+
+**Setup:**
+1. **Configure Email Settings:** Fill in email credentials in `bot/auths.py`:
+   ```python
+   EMAIL_SMTP_HOST='smtp.qq.com'
+   EMAIL_SMTP_PORT=465
+   EMAIL_SMTP_SECURE=True
+   EMAIL_SMTP_USER='your-email@example.com'
+   EMAIL_SMTP_PASS='your-app-password'
+   EMAIL_SMTP_NAME='Cecilia Bot'
+   EMAIL_SMTP_LOGGER=True
+   EMAIL_SMTP_TLS_REJECT_UNAUTH=True
+   EMAIL_SMTP_IGNORE_TLS=False
+   CUSTOM_EMAIL_FOOTER='Your custom footer message'
+   ```
+
+2. **Configure Email Recipients:** Add email addresses to `data/essay_summarizer/email_targets.json`:
+   ```json
+   [
+     "researcher1@university.edu",
+     "researcher2@company.com",
+     "team@research-group.org"
+   ]
+   ```
+
+**Email Features:**
+
+- **Rich HTML Emails:** Beautiful, responsive email templates with paper summaries
+- **Daily Automated Delivery:** Emails sent at 7:00 AM along with Discord notifications
+- **Comprehensive Content:** Each email includes:
+  - Paper titles, authors, and categories
+  - AI-generated Chinese summaries
+  - Direct links to ArXiv PDFs
+  - Processing statistics (new vs cached papers)
+  - Professional formatting optimized for academic content
+
+**Email Sending Availability Testing:**
+
+```bash
+python test_email_sending.py
+```
+
+This test script will:
+
+- Verify email configuration completeness
+- Test SMTP connection and authentication
+- Send sample emails with paper summaries
+- Validate email formatting and delivery
+
+And the email system will:
+
+- Send emails for each subscribed topic during the daily 7:00 AM run
+- Include recent papers context even when no new papers are found
+- Provide detailed delivery logs and error reporting
+- Support multiple SMTP providers (Gmail, Outlook, QQ Mail, etc.)
 
 #### Arxiv api
 
@@ -58,7 +137,7 @@ Refer to [Arxiv api User Manual](https://info.arxiv.org/help/api/user-manual.htm
 
 Use the `http://export.arxiv.org/api/{method_name}?{parameters}` api port to get essays regarding the topic.
 
-We'll just use this: `https://export.arxiv.org/api/query?search_query=all:[TOPIC]&sortBy=lastUpdatedDate&sortOrder=descending`, where [TOPIC] is the user provided param in their command.
+We'll just use this: `https://export.arxiv.org/api/query?search_query=[CATEGORY]:[TOPIC]&sortBy=lastUpdatedDate&sortOrder=descending`, where [CATEGORY] and [TOPIC] are the user provided params in their command.
 
 For example: `https://export.arxiv.org/api/query?search_query=all:ai&sortBy=lastUpdatedDate&sortOrder=descending` yields:
 
@@ -143,14 +222,17 @@ We use deepseek-r1:32b to summarize the results, and will remove the `<think>.*<
 ```
 SummarizeAndPush(topic):
     Use arxiv api to retrieve the latest papers of that topic, at most 10 papers
-    Check if Ollama service is running
+    Check if Ollama service is running, if not, raise exception
     for each paper:
         Check on disk, if already summarized before: 
-            continue (don't add to overall results)
+            if this SummarizeAndPush is invoked by /subscribe now:
+                add the paper's result to overall results
+            else:
+                continue
         Get the paper's pdf file
         Use markitdown to get the markdown version of this pdf
-        Use Ollama api to summarize the paper (needs to be easy to understand)
-        Add result to overall results (including the pdf link)
+        Use Ollama api to summarize the paper in an easy-to-understand tone
+        Add result to overall results, including the authors, pdf link, summary and categories&topics of the paper
     Construct a pretty discord flavor json message based on the overall results
     Send the json message to the user via Message Pusher
     Store the pdfs and the summarization results on disk
@@ -161,7 +243,8 @@ SummarizeAndPush(topic):
 ```
 SummarizeFromSubscription():
     for each topic in subscribed topics:
-        SummarizeAndPush(topic)
+        SummarizeAndPush(topic)  # Send to Discord users
+        SendEmailNotification(topic)  # Send to email recipients
 
 Every 07:00 a.m. in the morning:
     SummarizeFromSubscription()
@@ -179,14 +262,27 @@ Handles Discord slash command interactions via webhook with proper signature ver
    ```bash
    mv bot/auths-sample.py bot/auths.py
    # Fill in your Discord bot credentials including PUBLIC_KEY
+   # Fill in your email SMTP settings for automated notifications
    ```
 
-2. **Install Dependencies:**
+2. **Setup Email Recipients (Optional):**
+   ```bash
+   # Create email targets file
+   mkdir -p data/essay_summarizer
+   echo '["your-email@example.com"]' > data/essay_summarizer/email_targets.json
+   ```
+
+3. **Install Dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure Nginx:**
+4. **Test Email Configuration (Optional):**
+   ```bash
+   python test.py
+   ```
+
+5. **Configure Nginx:**
    Add the following to your Nginx configuration:
    ```nginx
    # Discord interactions endpoint - UPDATED CONFIGURATION
@@ -207,29 +303,27 @@ Handles Discord slash command interactions via webhook with proper signature ver
    }
    ```
 
-4. **Run the Bot:**
+6. **Run the Bot:**
    ```bash
    ./deploy.sh
    ```
 
-5. **Configure Discord Application:**
+7. **Configure Discord Application:**
    - Set interactions endpoint URL to: `https://dywsy21.cn:18080/bot/interactions`
    - Enable necessary bot permissions and scopes
    - Ensure PUBLIC_KEY is correctly set in auths.py
 
-## Internal Message Pushing
+## Testing
 
-Other services on your server can send messages via:
+### Email Service Testing
+
+Test the email notification system:
 
 ```bash
-curl -X POST http://localhost:8011/push \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "USER_DISCORD_ID",
-    "message": {
-      "content": "Hello from internal service!"
-    }
-  }'
+# Run comprehensive email tests
+python test.py
 ```
+
+
 
 
