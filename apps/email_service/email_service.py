@@ -4,10 +4,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 import logging
+import re
+import markdown
 from typing import List, Dict, Optional
 from datetime import datetime
 from pathlib import Path
-import re
 from bot.auths import (
     EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_SMTP_SECURE,
     EMAIL_SMTP_USER, EMAIL_SMTP_PASS, EMAIL_SMTP_NAME,
@@ -81,6 +82,17 @@ class EmailService:
         except Exception as e:
             logger.error(f"Error getting PDF path for {paper_url}: {e}")
             return None
+    
+    def _markdown_to_html(self, markdown_text: str) -> str:
+        """Convert markdown text to HTML"""
+        try:
+            # Use markdown library to convert markdown to HTML
+            html = markdown.markdown(markdown_text, extensions=['nl2br', 'tables', 'fenced_code'])
+            return html
+        except Exception as e:
+            logger.warning(f"Error converting markdown to HTML: {e}")
+            # Fallback to simple text conversion
+            return markdown_text.replace('\n', '<br>')
     
     async def send_paper_summary_email(self, 
                                      to_emails: List[str], 
@@ -243,6 +255,16 @@ class EmailService:
                 .paper-authors {{ color: #7f8c8d; font-size: 14px; margin-bottom: 10px; }}
                 .paper-categories {{ background: #ecf0f1; padding: 5px 10px; border-radius: 15px; font-size: 12px; color: #2c3e50; display: inline-block; margin-bottom: 15px; }}
                 .paper-summary {{ margin: 15px 0; line-height: 1.8; }}
+                .paper-summary h1, .paper-summary h2, .paper-summary h3 {{ color: #2c3e50; margin-top: 20px; margin-bottom: 10px; }}
+                .paper-summary h1 {{ font-size: 1.2em; }}
+                .paper-summary h2 {{ font-size: 1.1em; }}
+                .paper-summary h3 {{ font-size: 1.05em; }}
+                .paper-summary ul, .paper-summary ol {{ margin: 10px 0; padding-left: 20px; }}
+                .paper-summary li {{ margin: 5px 0; }}
+                .paper-summary strong {{ color: #2c3e50; }}
+                .paper-summary em {{ font-style: italic; color: #555; }}
+                .paper-summary code {{ background: #f4f4f4; padding: 2px 4px; border-radius: 3px; font-family: 'Courier New', monospace; }}
+                .paper-summary blockquote {{ border-left: 3px solid #ddd; margin: 15px 0; padding-left: 15px; color: #666; }}
                 .paper-link {{ background: #3498db; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-size: 14px; }}
                 .paper-link:hover {{ background: #2980b9; }}
                 .footer {{ background: #2c3e50; color: white; padding: 20px; text-align: center; font-size: 14px; }}
@@ -281,6 +303,9 @@ class EmailService:
                 authors_str = ", ".join(paper.get('authors', []))
                 categories_str = ", ".join(paper.get('categories', []))
                 
+                # Convert markdown summary to HTML
+                summary_html = self._markdown_to_html(paper['summary'])
+                
                 html += f"""
                 <div class="paper">
                     <div class="paper-title">📄 {paper['title']}</div>
@@ -288,7 +313,7 @@ class EmailService:
                     <div class="paper-categories">🏷️ {categories_str or '未分类'}</div>
                     <div class="paper-summary">
                         <strong>论文总结:</strong><br>
-                        {paper['summary'].replace('\n', '<br>')}
+                        {summary_html}
                     </div>
                     <div style="text-align: center; margin-top: 15px;">
                         <a href="{paper.get('pdf_url', '#')}" style="background: #3498db; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-size: 14px; display: inline-block;" target="_blank">📖 阅读原文</a>
