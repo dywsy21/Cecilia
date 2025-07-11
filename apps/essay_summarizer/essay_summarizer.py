@@ -232,7 +232,7 @@ class EssaySummarizer:
             return {}
     
     async def download_pdf(self, pdf_url: str, paper_id: str) -> Optional[Path]:
-        """Download PDF file from ArXiv"""
+        """Download PDF file from ArXiv with timeout and retry logic"""
         try:
             pdf_path = self.processed_papers_dir / f"{paper_id}.pdf"
             
@@ -240,20 +240,50 @@ class EssaySummarizer:
             if pdf_path.exists():
                 return pdf_path
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(pdf_url) as response:
-                    if response.status == 200:
-                        async with aiofiles.open(pdf_path, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                await f.write(chunk)
-                        logger.info(f"Downloaded PDF: {pdf_path}")
-                        return pdf_path
-                    else:
-                        logger.error(f"Failed to download PDF: {response.status}")
+            max_retries = 4
+            timeout_seconds = 20
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Downloading PDF attempt {attempt + 1}/{max_retries}: {paper_id}")
+                    
+                    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(pdf_url) as response:
+                            if response.status == 200:
+                                async with aiofiles.open(pdf_path, 'wb') as f:
+                                    async for chunk in response.content.iter_chunked(8192):
+                                        await f.write(chunk)
+                                logger.info(f"Successfully downloaded PDF: {pdf_path} (attempt {attempt + 1})")
+                                return pdf_path
+                            else:
+                                logger.warning(f"HTTP {response.status} on attempt {attempt + 1} for {paper_id}")
+                                if attempt == max_retries - 1:
+                                    logger.error(f"Failed to download PDF after {max_retries} attempts: HTTP {response.status}")
+                                    return None
+                                
+                except asyncio.TimeoutError:
+                    logger.warning(f"Download timeout ({timeout_seconds}s) on attempt {attempt + 1} for {paper_id}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to download PDF after {max_retries} attempts: timeout")
                         return None
+                    
+                except aiohttp.ClientError as e:
+                    logger.warning(f"Client error on attempt {attempt + 1} for {paper_id}: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to download PDF after {max_retries} attempts: {e}")
+                        return None
+                
+                # Wait before retry (exponential backoff)
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s
+                    logger.info(f"Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+            
+            return None
                         
         except Exception as e:
-            logger.error(f"Error downloading PDF: {e}")
+            logger.error(f"Unexpected error downloading PDF for {paper_id}: {e}")
             return None
     
     async def pdf_to_markdown(self, pdf_path: Path) -> Optional[str]:
@@ -315,7 +345,7 @@ class EssaySummarizer:
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.ollama_url, json=payload) as response:
+                async with session.post(self.olloma_url, json=payload) as response:
                     if response.status == 200:
                         result = await response.json()
                         summary = result.get('response', '')
