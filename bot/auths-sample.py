@@ -11,3 +11,4 @@ EMAIL_SMTP_LOGGER=False
 EMAIL_SMTP_TLS_REJECT_UNAUTH=False
 EMAIL_SMTP_IGNORE_TLS=False
 CUSTOM_EMAIL_FOOTER=''
+ADMIN_USER_ID=''  # Discord User ID for admin access to debug commands

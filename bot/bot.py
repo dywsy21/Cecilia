@@ -8,7 +8,7 @@ import json
 import nacl.signing
 import nacl.encoding
 from nacl.exceptions import BadSignatureError
-from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY
+from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY, ADMIN_USER_ID
 from apps.apps import AppManager
 import aiohttp
 import sys
@@ -89,6 +89,23 @@ class CeciliaBot(commands.Bot):
                 "name": "test_message",
                 "type": 1,
                 "description": "Test the message pusher by sending yourself a message"
+            },
+            {
+                "name": "debug",
+                "type": 1,
+                "description": "Admin debug commands",
+                "options": [
+                    {
+                        "name": "type",
+                        "description": "Debug type to execute",
+                        "type": 3,  # STRING
+                        "required": True,
+                        "choices": [
+                            {"name": "discord", "value": "discord"},
+                            {"name": "email", "value": "email"}
+                        ]
+                    }
+                ]
             }
         ]
 
@@ -232,6 +249,48 @@ class CeciliaBot(commands.Bot):
                         'type': 4,
                         'data': {
                             'embeds': [embed]
+                        }
+                    })
+                
+                elif command_name == 'debug':
+                    # Check if user is admin
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id')
+                    
+                    if not ADMIN_USER_ID or str(user_id) != str(ADMIN_USER_ID):
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': '❌ This command is only available for administrators.',
+                                'flags': 64  # Ephemeral
+                            }
+                        })
+                    
+                    # Get debug type parameter
+                    options = command_data.get('options', [])
+                    debug_type = None
+                    for option in options:
+                        if option.get('name') == 'type':
+                            debug_type = option.get('value')
+                            break
+                    
+                    if not debug_type:
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': '❌ Please specify debug type (discord or email)!',
+                                'flags': 64
+                            }
+                        })
+                    
+                    # Start background task for debug command
+                    asyncio.create_task(self.handle_debug_command(data, debug_type, user_id))
+                    
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'content': f'🔧 Starting debug execution for {debug_type} subscriptions... Results will be sent to you.',
+                            'flags': 64  # Ephemeral
                         }
                     })
                 
@@ -672,6 +731,238 @@ async def test_message(interaction: discord.Interaction):
     except Exception as e:
         logger.error(f"Error in test_message command: {e}")
         await interaction.followup.send(f"❌ Test failed with error: {str(e)}", ephemeral=True)
+
+    async def handle_debug_command(self, interaction_data, debug_type, user_id):
+        """Handle admin debug command execution"""
+        try:
+            logger.info(f"Admin debug command executed by user {user_id}: {debug_type}")
+            
+            if debug_type == 'discord':
+                # Execute Discord subscription processing
+                logger.info("Starting debug execution of Discord subscriptions...")
+                await self._debug_discord_subscriptions(user_id)
+                
+            elif debug_type == 'email':
+                # Execute Email subscription processing
+                logger.info("Starting debug execution of Email subscriptions...")
+                await self._debug_email_subscriptions(user_id)
+                
+            else:
+                await self._send_error_via_api(user_id, f"❌ Unknown debug type: {debug_type}")
+                
+        except Exception as e:
+            logger.error(f"Error in debug command: {e}")
+            await self._send_error_via_api(user_id, f"❌ Debug command failed: {str(e)}")
+
+    async def _debug_discord_subscriptions(self, admin_user_id):
+        """Debug execute Discord subscription processing"""
+        try:
+            # Get all Discord subscriptions
+            subscriptions = self.app_manager.essay_summarizer._cleanup_invalid_subscriptions()
+            
+            if not subscriptions:
+                await self._send_message_via_api(admin_user_id, {
+                    "embed": {
+                        "title": "🔧 Discord Debug - No Subscriptions",
+                        "description": "No Discord subscriptions found to process.",
+                        "color": "#ffa500"
+                    }
+                })
+                return
+            
+            # Send start notification
+            total_subscriptions = sum(len(user_subs) for user_subs in subscriptions.values())
+            await self._send_message_via_api(admin_user_id, {
+                "embed": {
+                    "title": "🔧 Discord Debug Started",
+                    "description": f"Processing {total_subscriptions} Discord subscriptions for {len(subscriptions)} users...",
+                    "color": "#0099ff"
+                }
+            })
+            
+            processed = 0
+            failed = 0
+            
+            # Process each subscription
+            for user_id, user_subscriptions in subscriptions.items():
+                for subscription in user_subscriptions:
+                    try:
+                        category = subscription.get('category', 'all')
+                        topic = subscription.get('topic', '')
+                        
+                        if not topic:
+                            failed += 1
+                            continue
+                        
+                        logger.info(f"Debug processing Discord subscription: {category}/{topic} for user {user_id}")
+                        result = await self.app_manager.essay_summarizer.summarize_and_push(
+                            category, topic, user_id, only_new=True, is_scheduled=True
+                        )
+                        
+                        if result['success']:
+                            processed += 1
+                        else:
+                            failed += 1
+                            
+                        # Add delay to avoid rate limits
+                        await asyncio.sleep(2)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing subscription {subscription}: {e}")
+                        failed += 1
+                        continue
+            
+            # Send completion notification
+            await self._send_message_via_api(admin_user_id, {
+                "embed": {
+                    "title": "✅ Discord Debug Completed",
+                    "description": f"Discord subscription processing finished.\n\n**Results:**\n• Processed: {processed}\n• Failed: {failed}\n• Total: {processed + failed}",
+                    "color": "#00ff00"
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in Discord debug: {e}")
+            await self._send_error_via_api(admin_user_id, f"❌ Discord debug failed: {str(e)}")
+
+    async def _debug_email_subscriptions(self, admin_user_id):
+        """Debug execute Email subscription processing"""
+        try:
+            # Get all email targets
+            email_targets = self.app_manager.essay_summarizer._load_email_targets()
+            
+            if not email_targets:
+                await self._send_message_via_api(admin_user_id, {
+                    "embed": {
+                        "title": "🔧 Email Debug - No Targets",
+                        "description": "No email targets found to process.",
+                        "color": "#ffa500"
+                    }
+                })
+                return
+            
+            # Send start notification
+            total_subscriptions = sum(len(paper_types) for paper_types in email_targets.values())
+            await self._send_message_via_api(admin_user_id, {
+                "embed": {
+                    "title": "🔧 Email Debug Started", 
+                    "description": f"Processing {total_subscriptions} email subscriptions for {len(email_targets)} email addresses...",
+                    "color": "#0099ff"
+                }
+            })
+            
+            processed = 0
+            failed = 0
+            
+            # Process each email subscription
+            for email, paper_types in email_targets.items():
+                if not paper_types:
+                    continue
+                    
+                for paper_type in paper_types:
+                    try:
+                        # Parse paper type (e.g., 'cs.ai' -> category='cs', topic='ai')
+                        if '.' in paper_type:
+                            category, topic = paper_type.split('.', 1)
+                        else:
+                            category = 'all'
+                            topic = paper_type
+                        
+                        logger.info(f"Debug processing email subscription: {category}/{topic} for {email}")
+                        
+                        # Get papers for this topic
+                        result = await self.app_manager.essay_summarizer.summarize_and_push(
+                            category, topic, user_id=None, only_new=True, is_scheduled=True
+                        )
+                        
+                        # Prepare papers for email
+                        email_papers = result.get('papers', [])
+                        email_stats = {
+                            'papers_count': len(email_papers),
+                            'new_papers': result.get('new_papers', 0),
+                            'cached_papers': result.get('cached_papers', 0)
+                        }
+                        
+                        # Skip if no papers found
+                        if not email_papers:
+                            logger.info(f"No papers found for debug email topic {paper_type} for {email}")
+                            continue
+                        
+                        # Send email
+                        email_result = await self.app_manager.essay_summarizer.email_service.send_paper_summary_email(
+                            to_emails=[email],
+                            category=category,
+                            topic=topic,
+                            papers=email_papers,
+                            stats=email_stats
+                        )
+                        
+                        if email_result['success']:
+                            processed += 1
+                        else:
+                            failed += 1
+                            
+                        # Add delay between emails
+                        await asyncio.sleep(3)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing email subscription {paper_type} for {email}: {e}")
+                        failed += 1
+                        continue
+                
+                # Add delay between email addresses
+                await asyncio.sleep(5)
+            
+            # Send completion notification
+            await self._send_message_via_api(admin_user_id, {
+                "embed": {
+                    "title": "✅ Email Debug Completed",
+                    "description": f"Email subscription processing finished.\n\n**Results:**\n• Processed: {processed}\n• Failed: {failed}\n• Total: {processed + failed}",
+                    "color": "#00ff00"
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in Email debug: {e}")
+            await self._send_error_via_api(admin_user_id, f"❌ Email debug failed: {str(e)}")
+
+    async def _send_error_via_api(self, user_id, error_message):
+        """Send error message via message pusher API"""
+        try:
+            await self._send_message_via_api(user_id, {
+                "embed": {
+                    "title": "❌ Error",
+                    "description": error_message,
+                    "color": "#ff0000"
+                }
+            })
+        except Exception as e:
+            logger.error(f"Failed to send error message: {e}")
+
+    async def _send_message_via_api(self, user_id, message_data):
+        """Send message via HTTP API to message pusher"""
+        try:
+            url = "http://localhost:8011/push"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "user_id": str(user_id),
+                "message": message_data
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Debug message sent successfully via API")
+                        return {"success": True, "result": result}
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Message pusher API error {response.status}: {error_text}")
+                        return {"success": False, "error": f"API error {response.status}: {error_text}"}
+                        
+        except Exception as e:
+            logger.error(f"Error calling message pusher API: {e}")
+            return {"success": False, "error": str(e)}
 
 def run_bot():
     """Function to run the bot"""

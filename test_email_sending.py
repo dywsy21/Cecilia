@@ -51,7 +51,7 @@ startxref
     test_files = [
         "2101.00001v1.pdf",
         "2101.00002v1.pdf",
-        "2024.12345v1.pdf"  # Additional test file
+        "2024.12345v1.pdf"
     ]
     
     created_files = []
@@ -105,38 +105,55 @@ def test_email_config():
         return False
 
 def load_email_targets():
-    """Load and validate email targets"""
+    """Load and validate email targets with new format"""
     email_targets_file = Path("data/essay_summarizer/email_targets.json")
     
     if not email_targets_file.exists():
         print("📁 email_targets.json not found. Creating empty file...")
         email_targets_file.parent.mkdir(parents=True, exist_ok=True)
         with open(email_targets_file, 'w', encoding='utf-8') as f:
-            json.dump([], f, indent=2)
+            json.dump({}, f, indent=2)
         print("✅ Created empty email_targets.json file")
         print("📝 Please add email addresses in this format:")
-        print('   ["email1@example.com", "email2@example.com"]')
-        return []
+        print('   {')
+        print('     "email1@example.com": ["cs.ai", "cs.cv"],')
+        print('     "email2@example.com": ["cs.lg", "eess.sp"]')
+        print('   }')
+        return {}
     
     try:
         with open(email_targets_file, 'r', encoding='utf-8') as f:
             email_targets = json.load(f)
         
+        # Handle old format migration
+        if isinstance(email_targets, list):
+            print("📁 Migrating from old format to new format...")
+            new_format = {email: [] for email in email_targets}
+            with open(email_targets_file, 'w', encoding='utf-8') as f:
+                json.dump(new_format, f, indent=2)
+            print("✅ Migration completed. Please update email_targets.json with paper types.")
+            return new_format
+        
         if not email_targets:
             print("📭 No email targets found in email_targets.json")
             print("📝 Please add email addresses in this format:")
-            print('   ["email1@example.com", "email2@example.com"]')
-            return []
+            print('   {')
+            print('     "email1@example.com": ["cs.ai", "cs.cv"],')
+            print('     "email2@example.com": ["cs.lg", "eess.sp"]')
+            print('   }')
+            return {}
         
-        print(f"📧 Found {len(email_targets)} email target(s): {email_targets}")
+        print(f"📧 Found {len(email_targets)} email target(s):")
+        for email, paper_types in email_targets.items():
+            print(f"   {email}: {paper_types}")
         return email_targets
         
     except json.JSONDecodeError as e:
         print(f"❌ Invalid JSON in email_targets.json: {e}")
-        return []
+        return {}
     except Exception as e:
         print(f"❌ Error loading email targets: {e}")
-        return []
+        return {}
 
 async def test_simple_email():
     """Test sending a simple email without papers or attachments"""
@@ -158,9 +175,12 @@ async def test_simple_email():
     }
     
     try:
-        print("📤 Sending simple test email...")
+        # Use first email address for testing
+        test_email = list(email_targets.keys())[0]
+        print(f"📤 Sending simple test email to {test_email}...")
+        
         result = await email_service.send_paper_summary_email(
-            to_emails=email_targets,
+            to_emails=[test_email],
             category='test',
             topic='email functionality',
             papers=[],  # Empty papers list
@@ -256,14 +276,16 @@ async def test_email_with_papers():
     }
     
     try:
-        print(f"📤 Sending email with {len(test_papers)} papers...")
+        # Use first email address for testing
+        test_email = list(email_targets.keys())[0]
+        print(f"📤 Sending email with {len(test_papers)} papers to {test_email}...")
         print("📎 Expected attachments:")
         for i, paper in enumerate(test_papers, 1):
             title = paper['title'][:60] + "..." if len(paper['title']) > 60 else paper['title']
             print(f"   {i}. {title}.pdf")
         
         result = await email_service.send_paper_summary_email(
-            to_emails=email_targets,
+            to_emails=[test_email],
             category='cs',
             topic='artificial intelligence',
             papers=test_papers,
@@ -289,6 +311,135 @@ async def test_email_with_papers():
         print(f"❌ Papers email test failed with exception: {e}")
         logger.exception("Full error traceback:")
         return False
+
+async def test_multiple_paper_types():
+    """Test sending emails for multiple paper types (new feature)"""
+    print("\n" + "="*50)
+    print("=== Testing Multiple Paper Types Email ===")
+    print("="*50)
+    
+    email_service = EmailService()
+    email_targets = load_email_targets()
+    
+    if not email_targets:
+        print("⏭️  Skipping multiple paper types test - no email targets")
+        return False
+    
+    # Create test PDF files
+    print("📄 Creating test PDF files...")
+    created_files = await create_test_pdf_files()
+    print(f"✅ Created {len(created_files)} test PDF files")
+    
+    # Test different paper types that a user might subscribe to
+    paper_type_tests = [
+        {
+            'category': 'cs',
+            'topic': 'ai',
+            'papers': [
+                {
+                    'title': 'Artificial Intelligence Advances in Natural Language Processing',
+                    'authors': ['Dr. AI Smith', '李人工智能'],
+                    'summary': '本研究探讨了自然语言处理领域的最新AI进展，提出了新的预训练模型架构，在多项基准测试中取得了突破性成果。',
+                    'pdf_url': 'https://arxiv.org/pdf/2101.00001v1',
+                    'categories': ['cs.AI', 'cs.CL']
+                }
+            ]
+        },
+        {
+            'category': 'cs', 
+            'topic': 'cv',
+            'papers': [
+                {
+                    'title': 'Computer Vision Breakthroughs in Object Detection',
+                    'authors': ['Prof. Vision Expert', '张计算机视觉'],
+                    'summary': '本论文介绍了目标检测领域的重大突破，新算法在准确率和速度方面都有显著提升，为实时应用奠定了基础。',
+                    'pdf_url': 'https://arxiv.org/pdf/2101.00002v1',
+                    'categories': ['cs.CV', 'cs.LG']
+                }
+            ]
+        },
+        {
+            'category': 'eess',
+            'topic': 'sp', 
+            'papers': [
+                {
+                    'title': 'Signal Processing Applications in Modern Communication Systems',
+                    'authors': ['Dr. Signal Proc', '王信号处理'],
+                    'summary': '本研究提出了现代通信系统中信号处理的新方法，显著改善了信号质量和传输效率，为5G/6G技术发展提供支撑。',
+                    'pdf_url': 'https://arxiv.org/pdf/2024.12345v1',
+                    'categories': ['eess.SP', 'cs.IT']
+                }
+            ]
+        }
+    ]
+    
+    # Test first email address that has paper type subscriptions
+    test_email = None
+    test_paper_types = []
+    
+    for email, paper_types in email_targets.items():
+        if paper_types:  # Find an email with actual paper type subscriptions
+            test_email = email
+            test_paper_types = paper_types
+            break
+    
+    if not test_email:
+        print("⏭️  No email addresses with paper type subscriptions found")
+        print("📝 Please add paper types to an email address in email_targets.json")
+        return False
+    
+    print(f"🎯 Testing with email: {test_email}")
+    print(f"📚 Subscribed paper types: {test_paper_types}")
+    
+    success_count = 0
+    total_tests = len(paper_type_tests)
+    
+    for i, test_case in enumerate(paper_type_tests, 1):
+        try:
+            category = test_case['category']
+            topic = test_case['topic']
+            papers = test_case['papers']
+            paper_type = f"{category}.{topic}"
+            
+            print(f"\n📧 Test {i}/{total_tests}: Sending {paper_type} papers...")
+            
+            # Check if this paper type is in the user's subscriptions
+            if paper_type not in test_paper_types:
+                print(f"⏭️  Skipping {paper_type} - not in user's subscriptions")
+                continue
+            
+            stats = {
+                'papers_count': len(papers),
+                'new_papers': len(papers),
+                'cached_papers': 0
+            }
+            
+            result = await email_service.send_paper_summary_email(
+                to_emails=[test_email],
+                category=category,
+                topic=topic,
+                papers=papers,
+                stats=stats
+            )
+            
+            if result['success']:
+                print(f"✅ {paper_type} email sent successfully!")
+                print(f"📬 Subject: {result['subject']}")
+                print(f"📎 Attachments: {result.get('attachments', 0)}")
+                success_count += 1
+            else:
+                print(f"❌ {paper_type} email failed!")
+                print(f"💥 Error: {result['error']}")
+            
+            # Add delay between emails to avoid rate limiting
+            await asyncio.sleep(2)
+            
+        except Exception as e:
+            print(f"❌ Error testing paper type {test_case['category']}.{test_case['topic']}: {e}")
+            continue
+    
+    print(f"\n📊 Multiple paper types test results: {success_count}/{total_tests} successful")
+    return success_count > 0
 
 async def test_email_configuration_connectivity():
     """Test SMTP connectivity without sending actual emails"""
@@ -329,6 +480,53 @@ async def test_email_configuration_connectivity():
         print(f"❌ SMTP connectivity test failed: {e}")
         return False
 
+def create_sample_email_targets():
+    """Create a sample email_targets.json file with examples"""
+    print("\n" + "="*50)
+    print("=== Creating Sample Email Targets File ===")
+    print("="*50)
+    
+    email_targets_file = Path("data/essay_summarizer/email_targets.json")
+    email_targets_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    sample_data = {
+        "researcher1@university.edu": [
+            "cs.ai",
+            "cs.cv", 
+            "cs.lg"
+        ],
+        "engineer@company.com": [
+            "cs.ar",
+            "eess.sp",
+            "eess.sy"
+        ],
+        "student@school.edu": [
+            "cs.ai",
+            "stat.ml",
+            "math.oc"
+        ]
+    }
+    
+    try:
+        with open(email_targets_file, 'w', encoding='utf-8') as f:
+            json.dump(sample_data, f, indent=2, ensure_ascii=False)
+        
+        print("✅ Sample email_targets.json created successfully!")
+        print("📝 Sample configuration:")
+        for email, paper_types in sample_data.items():
+            print(f"   {email}: {paper_types}")
+        
+        print("\n💡 To use for testing:")
+        print("1. Replace sample email addresses with real ones")
+        print("2. Modify paper types according to your interests")
+        print("3. Run the email tests again")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to create sample file: {e}")
+        return False
+
 async def cleanup_test_files():
     """Clean up test PDF files"""
     try:
@@ -349,15 +547,16 @@ async def cleanup_test_files():
         print(f"⚠️  Warning: Could not clean up test files: {e}")
 
 async def main():
-    """Main test function with comprehensive email testing"""
-    print("🤖 Cecilia Email Service Test Suite")
+    """Main test function with comprehensive email testing including new features"""
+    print("🤖 Cecilia Email Service Test Suite - Advanced Edition")
     print("="*60)
     
     test_results = {
         'config': False,
         'connectivity': False,
         'simple_email': False,
-        'papers_email': False
+        'papers_email': False,
+        'multiple_paper_types': False
     }
     
     try:
@@ -375,11 +574,22 @@ async def main():
             print("\n❌ SMTP connectivity failed. Please check network and credentials.")
             return
         
+        # Check if email targets exist and offer to create sample
+        email_targets = load_email_targets()
+        if not email_targets:
+            print("\n📝 No email targets found. Would you like to create a sample configuration?")
+            create_sample_email_targets()
+            print("\n⏭️  Please update the sample file with real email addresses and run the test again.")
+            return
+        
         # Test 3: Simple email
         test_results['simple_email'] = await test_simple_email()
         
         # Test 4: Email with papers and attachments
         test_results['papers_email'] = await test_email_with_papers()
+        
+        # Test 5: Multiple paper types (NEW FEATURE)
+        test_results['multiple_paper_types'] = await test_multiple_paper_types()
         
     finally:
         # Cleanup
@@ -395,13 +605,15 @@ async def main():
     
     for test_name, result in test_results.items():
         status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{test_name.replace('_', ' ').title():.<30} {status}")
+        display_name = test_name.replace('_', ' ').title()
+        print(f"{display_name:.<35} {status}")
     
     print(f"\nOverall: {passed_tests}/{total_tests} tests passed")
     
     if passed_tests == total_tests:
-        print("🎉 All tests passed! Email system is working correctly.")
+        print("🎉 All tests passed! Email system with new features is working correctly.")
         print("📧 You should now check the recipient email inbox(es) to verify delivery.")
+        print("📚 The new per-user paper type subscription system is ready for use!")
     elif test_results['config'] and test_results['connectivity']:
         print("⚠️  Email configuration works, but some email tests failed.")
         print("🔍 Check email targets configuration and try again.")
@@ -411,7 +623,16 @@ async def main():
     print("\n📝 Next steps:")
     print("1. Verify email delivery in recipient inboxes")
     print("2. Check PDF attachments are properly named and readable")
-    print("3. Test with actual research paper subscriptions")
+    print("3. Update email_targets.json with real email addresses and paper types")
+    print("4. Test with actual research paper subscriptions")
+    print("5. Verify the new per-user paper type subscription workflow")
+    
+    print("\n🔧 New Features Tested:")
+    print("• Per-user paper type subscriptions")
+    print("• Multiple emails per user for different topics")
+    print("• Enhanced email target format: {email: [paper_types]}")
+    print("• PDF attachments with numbered, readable filenames")
+    print("• Rich HTML email templates with paper summaries")
 
 if __name__ == "__main__":
     asyncio.run(main())

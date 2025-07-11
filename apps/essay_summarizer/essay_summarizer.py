@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
@@ -39,7 +39,7 @@ class EssaySummarizer:
             
             # Initialize email targets file if it doesn't exist
             if not self.email_targets_file.exists():
-                self._save_email_targets([])
+                self._save_email_targets({})
             
             self.app_manager = None  # Will be set by AppManager
             self.email_service = EmailService()
@@ -65,10 +65,6 @@ class EssaySummarizer:
         """Search ArXiv for papers on a specific category and topic"""
         try:
             # Build search query based on category
-            # if category.lower() == 'all':
-            #     search_query = f'all:{topic}'
-            # else:
-            #     search_query = f'cot:{category} AND all:{topic}'
             search_query = f'{category if category else 'all'}.{topic}'
             
             params = {
@@ -143,16 +139,26 @@ class EssaySummarizer:
             logger.error(f"Error parsing ArXiv XML: {e}")
             return []
     
-    def _load_email_targets(self) -> List[str]:
-        """Load email targets from disk"""
+    def _load_email_targets(self) -> Dict[str, List[str]]:
+        """Load email targets from disk with new format: {email: [categories]}"""
         try:
             with open(self.email_targets_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                
+                # Handle migration from old format (list of strings) to new format (dict)
+                if isinstance(data, list):
+                    logger.info("Migrating email_targets.json from old format to new format")
+                    # Convert old format to new format with empty subscriptions
+                    new_data = {email: [] for email in data}
+                    self._save_email_targets(new_data)
+                    return new_data
+                
+                return data
         except Exception as e:
             logger.error(f"Error loading email targets: {e}")
-            return []
+            return {}
 
-    def _save_email_targets(self, email_targets: List[str]):
+    def _save_email_targets(self, email_targets: Dict[str, List[str]]):
         """Save email targets to disk"""
         try:
             with open(self.email_targets_file, 'w', encoding='utf-8') as f:
@@ -354,6 +360,40 @@ class EssaySummarizer:
         summary_file = self.summaries_dir / f"{paper_hash}.json"
         return summary_file.exists()
     
+    def _is_paper_processed_today(self, paper_id: str) -> bool:
+        """Check if paper was processed today"""
+        paper_hash = self._get_paper_hash(paper_id)
+        summary_file = self.summaries_dir / f"{paper_hash}.json"
+        
+        if not summary_file.exists():
+            return False
+        
+        try:
+            # Check file modification time
+            file_mod_time = datetime.fromtimestamp(summary_file.stat().st_mtime)
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            return file_mod_time >= today_start
+        except Exception as e:
+            logger.error(f"Error checking file modification time for {paper_id}: {e}")
+            return False
+    
+    def _was_paper_processed_before_today(self, paper_id: str) -> bool:
+        """Check if paper was processed before today (not including today)"""
+        paper_hash = self._get_paper_hash(paper_id)
+        summary_file = self.summaries_dir / f"{paper_hash}.json"
+        
+        if not summary_file.exists():
+            return False
+        
+        try:
+            # Check file modification time
+            file_mod_time = datetime.fromtimestamp(summary_file.stat().st_mtime)
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            return file_mod_time < today_start
+        except Exception as e:
+            logger.error(f"Error checking file modification time for {paper_id}: {e}")
+            return False
+    
     async def _save_paper_summary(self, paper: Dict, summary: str):
         """Save paper summary to disk"""
         paper_hash = self._get_paper_hash(paper['id'])
@@ -521,10 +561,10 @@ class EssaySummarizer:
                 logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
                 continue
 
-    async def summarize_and_push(self, category: str, topic: str, user_id: str = None, only_new: bool = False) -> Dict:
+    async def summarize_and_push(self, category: str, topic: str, user_id: str = None, only_new: bool = False, is_scheduled: bool = False) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
-            logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id}, only_new: {only_new})")
+            logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id}, only_new: {only_new}, scheduled: {is_scheduled})")
             
             # Search for papers
             logger.info(f"Searching ArXiv for papers in category '{category}' on topic: '{topic}'")
@@ -552,21 +592,18 @@ class EssaySummarizer:
                     paper_id = paper['id']
                     logger.info(f"Processing paper {i}/{len(papers)}: {paper_id}")
                     
-                    # Check if already processed
-                    if self._is_paper_processed(paper_id):
-                        logger.info(f"Paper {paper_id} already processed")
-                        
-                        if only_new:
-                            # For scheduled subscriptions, skip already processed papers
-                            logger.info(f"Skipping already processed paper {paper_id} (only_new=True)")
+                    # Different logic for scheduled vs instant requests
+                    if is_scheduled:
+                        # For scheduled runs: skip papers processed before today
+                        if self._was_paper_processed_before_today(paper_id):
+                            logger.info(f"Skipping paper {paper_id} - processed before today")
                             continue
-                        else:
-                            # For instant requests, include cached papers
-                            logger.info(f"Loading existing summary for paper {paper_id} (only_new=False)")
+                        
+                        # If processed today, reuse the summary but still include in results
+                        if self._is_paper_processed_today(paper_id):
+                            logger.info(f"Paper {paper_id} processed today - reusing summary")
                             existing_summary = await self._load_existing_summary(paper_id)
-                            
                             if existing_summary:
-                                # Add existing summary to results
                                 summarized_papers.append({
                                     'title': existing_summary['title'],
                                     'authors': existing_summary['authors'],
@@ -575,10 +612,33 @@ class EssaySummarizer:
                                     'categories': existing_summary.get('categories', [])
                                 })
                                 reused_count += 1
-                                logger.info(f"Reused existing summary for paper {paper_id}")
+                                logger.info(f"Reused today's summary for paper {paper_id}")
+                                continue
+                        
+                        # If not processed at all, proceed to process
+                    else:
+                        # For instant requests: include all papers, but reuse summaries if available
+                        if self._is_paper_processed(paper_id):
+                            if only_new:
+                                logger.info(f"Skipping already processed paper {paper_id} (only_new=True)")
                                 continue
                             else:
-                                logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
+                                logger.info(f"Loading existing summary for paper {paper_id} (only_new=False)")
+                                existing_summary = await self._load_existing_summary(paper_id)
+                                
+                                if existing_summary:
+                                    summarized_papers.append({
+                                        'title': existing_summary['title'],
+                                        'authors': existing_summary['authors'],
+                                        'summary': existing_summary['summary'],
+                                        'pdf_url': existing_summary.get('pdf_url', ''),
+                                        'categories': existing_summary.get('categories', [])
+                                    })
+                                    reused_count += 1
+                                    logger.info(f"Reused existing summary for paper {paper_id}")
+                                    continue
+                                else:
+                                    logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
                     
                     # Download PDF
                     logger.debug(f"Step 1/3: Downloading PDF for paper {paper_id}")
@@ -653,7 +713,8 @@ class EssaySummarizer:
                     "message": f"Found {len(summarized_papers)} papers for category '{category}', topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
                     "papers_count": len(summarized_papers),
                     "new_papers": processed_count,
-                    "cached_papers": reused_count
+                    "cached_papers": reused_count,
+                    "papers": summarized_papers
                 }
             else:
                 # Handle case where no papers are found (especially for only_new=True)
@@ -665,14 +726,16 @@ class EssaySummarizer:
                         "papers_count": 0,
                         "new_papers": 0,
                         "cached_papers": 0,
-                        "no_new_papers": True
+                        "no_new_papers": True,
+                        "papers": []
                     }
                 else:
                     logger.info(f"No papers could be processed for category '{category}', topic '{topic}'")
                     return {
                         "success": False,
                         "error": f"No papers could be processed for category '{category}', topic '{topic}' - all papers failed processing",
-                        "papers_count": 0
+                        "papers_count": 0,
+                        "papers": []
                     }
                 
         except Exception as e:
@@ -682,7 +745,7 @@ class EssaySummarizer:
     
     async def instantly_summarize_and_push(self, category: str, topic: str, user_id: str) -> Dict:
         """Instantly summarize papers for a category and topic and push to user (includes cached papers)"""
-        result = await self.summarize_and_push(category, topic, user_id, only_new=False)
+        result = await self.summarize_and_push(category, topic, user_id, only_new=False, is_scheduled=False)
         return result
 
     def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int, only_new: bool = False) -> Dict:
@@ -823,8 +886,10 @@ class EssaySummarizer:
         subscriptions = self._cleanup_invalid_subscriptions()
         email_targets = self._load_email_targets()
         
-        logger.info(f"Starting scheduled subscription processing for {len(subscriptions)} users and {len(email_targets)} email targets")
+        logger.info(f"Starting scheduled subscription processing for {len(subscriptions)} Discord users and {len(email_targets)} email targets")
         
+        # Phase 1: Process Discord subscriptions
+        logger.info("Phase 1: Processing Discord subscriptions...")
         for user_id, user_subscriptions in subscriptions.items():
             for subscription in user_subscriptions:
                 try:
@@ -835,90 +900,88 @@ class EssaySummarizer:
                         logger.warning(f"Skipping invalid subscription for user {user_id}: {subscription}")
                         continue
                     
-                    logger.info(f"Processing scheduled subscription: {category}/{topic} for user {user_id}")
-                    # Use only_new=True for scheduled subscriptions
-                    result = await self.summarize_and_push(category, topic, user_id, only_new=True)
-                    
-                    # Send email after processing each topic (regardless of whether there are new papers)
-                    if email_targets:
-                        try:
-                            # Get papers for email (including cached if no new papers found)
-                            email_papers = []
-                            email_stats = result.copy()
-                            
-                            if result.get('no_new_papers') and result.get('papers_count', 0) == 0:
-                                # If no new papers, get some recent papers for email context
-                                logger.info(f"No new papers for {category}/{topic}, fetching recent papers for email")
-                                email_result = await self.summarize_and_push(category, topic, None, only_new=False)
-                                if email_result['success']:
-                                    # Get the actual paper data from the recent processing
-                                    recent_papers = await self._get_recent_papers_for_email(category, topic, max_papers=3)
-                                    email_papers = recent_papers
-                                    email_stats.update({
-                                        'papers_count': len(recent_papers),
-                                        'new_papers': 0,
-                                        'cached_papers': len(recent_papers)
-                                    })
-                            
-                            # Send email to all targets
-                            email_result = await self.email_service.send_paper_summary_email(
-                                to_emails=email_targets,
-                                category=category,
-                                topic=topic,
-                                papers=email_papers,
-                                stats=email_stats
-                            )
-                            
-                            if email_result['success']:
-                                logger.info(f"Email sent successfully for {category}/{topic} to {len(email_targets)} recipients")
-                            else:
-                                logger.error(f"Failed to send email for {category}/{topic}: {email_result.get('error')}")
-                                
-                        except Exception as e:
-                            logger.error(f"Error sending email for subscription {category}/{topic}: {e}")
+                    logger.info(f"Processing Discord subscription: {category}/{topic} for user {user_id}")
+                    # Use is_scheduled=True for scheduled subscriptions
+                    result = await self.summarize_and_push(category, topic, user_id, only_new=True, is_scheduled=True)
                     
                     # Log the Discord result
                     if result.get('no_new_papers'):
-                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}, skipping Discord notification")
+                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}")
                     elif result['success']:
-                        logger.info(f"Sent {result['papers_count']} new papers to user {user_id} for {category}/{topic}")
+                        logger.info(f"Sent {result['papers_count']} papers to user {user_id} for {category}/{topic}")
                     else:
                         logger.error(f"Failed to process subscription {category}/{topic} for user {user_id}: {result.get('error')}")
                     
                     # Add delay between processing to avoid rate limits
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(3)
                 except Exception as e:
-                    logger.error(f"Error processing subscription {subscription} for user {user_id}: {e}")
+                    logger.error(f"Error processing Discord subscription {subscription} for user {user_id}: {e}")
                     continue
-
-    async def _get_recent_papers_for_email(self, category: str, topic: str, max_papers: int = 3) -> List[Dict]:
-        """Get recent papers for email when no new papers are found"""
-        try:
-            # Search for recent papers
-            papers = await self.search_arxiv(category, topic, max_results=max_papers)
-            recent_summaries = []
-            
-            for paper in papers:
-                paper_id = paper['id']
-                existing_summary = await self._load_existing_summary(paper_id)
+        
+        # Phase 2: Process Email subscriptions
+        logger.info("Phase 2: Processing Email subscriptions...")
+        if email_targets:
+            for email, paper_types in email_targets.items():
+                if not paper_types:
+                    logger.info(f"Skipping email {email} - no paper types configured")
+                    continue
                 
-                if existing_summary:
-                    recent_summaries.append({
-                        'title': existing_summary['title'],
-                        'authors': existing_summary['authors'],
-                        'summary': existing_summary['summary'],
-                        'pdf_url': existing_summary.get('pdf_url', ''),
-                        'categories': existing_summary.get('categories', [])
-                    })
+                logger.info(f"Processing email subscriptions for {email}: {paper_types}")
                 
-                if len(recent_summaries) >= max_papers:
-                    break
-            
-            return recent_summaries
-            
-        except Exception as e:
-            logger.error(f"Error getting recent papers for email: {e}")
-            return []
+                for paper_type in paper_types:
+                    try:
+                        # Parse paper type (e.g., 'cs.ai' -> category='cs', topic='ai')
+                        if '.' in paper_type:
+                            category, topic = paper_type.split('.', 1)
+                        else:
+                            category = 'all'
+                            topic = paper_type
+                        
+                        logger.info(f"Processing email subscription: {category}/{topic} for {email}")
+                        
+                        # Get papers for this topic (scheduled mode)
+                        result = await self.summarize_and_push(category, topic, user_id=None, only_new=True, is_scheduled=True)
+                        
+                        # Prepare papers for email
+                        email_papers = result.get('papers', [])
+                        email_stats = {
+                            'papers_count': len(email_papers),
+                            'new_papers': result.get('new_papers', 0),
+                            'cached_papers': result.get('cached_papers', 0)
+                        }
+                        
+                        # If no papers found, skip this topic for this email
+                        if not email_papers:
+                            logger.info(f"No papers found for email topic {paper_type} for {email}")
+                            continue
+                        
+                        # Send email for this specific topic
+                        email_result = await self.email_service.send_paper_summary_email(
+                            to_emails=[email],
+                            category=category,
+                            topic=topic,
+                            papers=email_papers,
+                            stats=email_stats
+                        )
+                        
+                        if email_result['success']:
+                            logger.info(f"Email sent successfully for {paper_type} to {email}")
+                        else:
+                            logger.error(f"Failed to send email for {paper_type} to {email}: {email_result.get('error')}")
+                        
+                        # Add delay between topics to avoid overwhelming email servers
+                        await asyncio.sleep(5)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing email subscription {paper_type} for {email}: {e}")
+                        continue
+                
+                # Add delay between different email addresses
+                await asyncio.sleep(10)
+        else:
+            logger.info("No email targets configured, skipping email phase")
+        
+        logger.info("Scheduled subscription processing completed")
 
     async def start_scheduler(self):
         """Start the daily scheduler for subscriptions"""
