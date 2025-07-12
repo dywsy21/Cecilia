@@ -682,9 +682,9 @@ class EssaySummarizer:
                             logger.info(f"Skipping paper {paper_id} - processed before today")
                             continue
                         
-                        # If processed today, reuse the summary but still include in results
-                        if self._is_paper_processed_today(paper_id):
-                            logger.info(f"Paper {paper_id} processed today - reusing summary")
+                        # If processed, reuse the summary but still include in results
+                        if self._is_paper_processed(paper_id):
+                            logger.info(f"Paper {paper_id} processed - reusing summary")
                             existing_summary = await self._load_existing_summary(paper_id)
                             if existing_summary:
                                 summarized_papers.append({
