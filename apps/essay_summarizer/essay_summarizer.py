@@ -422,13 +422,13 @@ class EssaySummarizer:
             async with aiohttp.ClientSession() as session:
                 async with session.get("http://localhost:11434/api/tags", timeout=5) as response:
                     if response.status == 200:
-                        logger.info("ollama service is running")
+                        logger.info("ollima service is running")
                         return True
                     else:
-                        logger.error("ollama service returned non-200 status")
+                        logger.error("ollima service returned non-200 status")
                         return False
         except Exception as e:
-            logger.error(f"ollama service check failed: {e}")
+            logger.error(f"ollima service check failed: {e}")
             return False
     
     def _get_paper_hash(self, paper_id: str) -> str:
@@ -662,7 +662,7 @@ class EssaySummarizer:
             logger.info("Checking ollama service availability...")
             if not await self.check_ollama_service():
                 logger.error("ollama service check failed")
-                return {"success": False, "error": "ollama service is not running. Please ensure ollama serve is running."}
+                return {"success": False, "error": "olloma service is not running. Please ensure olloma serve is running."}
             
             summarized_papers = []
             processed_count = 0
@@ -1002,59 +1002,106 @@ class EssaySummarizer:
         # Phase 2: Process Email subscriptions
         logger.info("Phase 2: Processing Email subscriptions...")
         if email_targets:
+            # Get all unique paper types from all email subscriptions
+            all_paper_types = set()
             for email, paper_types in email_targets.items():
-                if not paper_types:
+                all_paper_types.update(paper_types)
+            
+            logger.info(f"Found {len(all_paper_types)} unique paper types across all email subscriptions: {list(all_paper_types)}")
+            
+            # Process each unique paper type once and collect results
+            paper_type_results = {}
+            for paper_type in all_paper_types:
+                try:
+                    # Parse paper type (e.g., 'cs.ai' -> category='cs', topic='ai')
+                    if '.' in paper_type:
+                        category, topic = paper_type.split('.', 1)
+                    else:
+                        category = 'all'
+                        topic = paper_type
+                    
+                    logger.info(f"Processing paper type: {category}/{topic}")
+                    
+                    # Get papers for this topic (scheduled mode)
+                    result = await self.summarize_and_push(category, topic, user_id=None, only_new=True, is_scheduled=True)
+                    
+                    # Store result for this paper type
+                    paper_type_results[paper_type] = {
+                        'category': category,
+                        'topic': topic,
+                        'papers': result.get('papers', []),
+                        'stats': {
+                            'papers_count': len(result.get('papers', [])),
+                            'new_papers': result.get('new_papers', 0),
+                            'cached_papers': result.get('cached_papers', 0)
+                        },
+                        'success': result.get('success', False),
+                        'no_new_papers': result.get('no_new_papers', False)
+                    }
+                    
+                    logger.info(f"Paper type {paper_type}: {len(result.get('papers', []))} papers found")
+                    
+                    # Add delay between paper type processing
+                    await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing paper type {paper_type}: {e}")
+                    paper_type_results[paper_type] = {
+                        'category': category if 'category' in locals() else 'unknown',
+                        'topic': topic if 'topic' in locals() else paper_type,
+                        'papers': [],
+                        'stats': {'papers_count': 0, 'new_papers': 0, 'cached_papers': 0},
+                        'success': False,
+                        'error': str(e)
+                    }
+                    continue
+            
+            # Now send emails to each email address based on their subscriptions
+            for email, subscribed_paper_types in email_targets.items():
+                if not subscribed_paper_types:
                     logger.info(f"Skipping email {email} - no paper types configured")
                     continue
                 
-                logger.info(f"Processing email subscriptions for {email}: {paper_types}")
+                logger.info(f"Processing email subscriptions for {email}: {subscribed_paper_types}")
                 
-                for paper_type in paper_types:
+                for paper_type in subscribed_paper_types:
                     try:
-                        # Parse paper type (e.g., 'cs.ai' -> category='cs', topic='ai')
-                        if '.' in paper_type:
-                            category, topic = paper_type.split('.', 1)
-                        else:
-                            category = 'all'
-                            topic = paper_type
-                        
-                        logger.info(f"Processing email subscription: {category}/{topic} for {email}")
-                        
-                        # Get papers for this topic (scheduled mode)
-                        result = await self.summarize_and_push(category, topic, user_id=None, only_new=True, is_scheduled=True)
-                        
-                        # Prepare papers for email
-                        email_papers = result.get('papers', [])
-                        email_stats = {
-                            'papers_count': len(email_papers),
-                            'new_papers': result.get('new_papers', 0),
-                            'cached_papers': result.get('cached_papers', 0)
-                        }
-                        
-                        # If no papers found, skip this topic for this email
-                        if not email_papers:
-                            logger.info(f"No papers found for email topic {paper_type} for {email}")
+                        # Get the processed result for this paper type
+                        if paper_type not in paper_type_results:
+                            logger.warning(f"Paper type {paper_type} not found in results for {email}")
                             continue
                         
-                        # Send email for this specific topic
+                        result_data = paper_type_results[paper_type]
+                        
+                        # Skip if no papers found or processing failed
+                        if not result_data['success'] or not result_data['papers']:
+                            if result_data.get('no_new_papers'):
+                                logger.info(f"No new papers for {paper_type} for email {email}")
+                            else:
+                                logger.warning(f"No papers or failed processing for {paper_type} for email {email}")
+                            continue
+                        
+                        # Send email for this specific paper type
+                        logger.info(f"Sending email for {paper_type} to {email} with {len(result_data['papers'])} papers")
+                        
                         email_result = await self.email_service.send_paper_summary_email(
                             to_emails=[email],
-                            category=category,
-                            topic=topic,
-                            papers=email_papers,
-                            stats=email_stats
+                            category=result_data['category'],
+                            topic=result_data['topic'],
+                            papers=result_data['papers'],
+                            stats=result_data['stats']
                         )
                         
                         if email_result['success']:
-                            logger.info(f"Email sent successfully for {paper_type} to {email}")
+                            logger.info(f"Email sent successfully for {paper_type} to {email}: {len(result_data['papers'])} papers")
                         else:
                             logger.error(f"Failed to send email for {paper_type} to {email}: {email_result.get('error')}")
                         
-                        # Add delay between topics to avoid overwhelming email servers
+                        # Add delay between emails to avoid overwhelming email servers
                         await asyncio.sleep(5)
                         
                     except Exception as e:
-                        logger.error(f"Error processing email subscription {paper_type} for {email}: {e}")
+                        logger.error(f"Error sending email for {paper_type} to {email}: {e}")
                         continue
                 
                 # Add delay between different email addresses
