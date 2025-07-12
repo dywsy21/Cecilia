@@ -11,6 +11,8 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
+
+from bot.config import SUBSCRIPTION_ONLY_NEW
 from ..email_service.email_service import EmailService
 
 logger = logging.getLogger(__name__)
@@ -676,7 +678,7 @@ class EssaySummarizer:
                     # Different logic for scheduled vs instant requests
                     if is_scheduled:
                         # For scheduled runs: skip papers processed before today
-                        if self._was_paper_processed_before_today(paper_id):
+                        if self._was_paper_processed_before_today(paper_id) and SUBSCRIPTION_ONLY_NEW:
                             logger.info(f"Skipping paper {paper_id} - processed before today")
                             continue
                         
@@ -983,7 +985,7 @@ class EssaySummarizer:
                     
                     logger.info(f"Processing Discord subscription: {category}/{topic} for user {user_id}")
                     # Use is_scheduled=True for scheduled subscriptions
-                    result = await self.summarize_and_push(category, topic, user_id, only_new=True, is_scheduled=True)
+                    result = await self.summarize_and_push(category, topic, user_id, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True)
                     
                     # Log the Discord result
                     if result.get('no_new_papers'):
@@ -1023,7 +1025,7 @@ class EssaySummarizer:
                     logger.info(f"Processing paper type: {category}/{topic}")
                     
                     # Get papers for this topic (scheduled mode)
-                    result = await self.summarize_and_push(category, topic, user_id=None, only_new=True, is_scheduled=True)
+                    result = await self.summarize_and_push(category, topic, user_id=None, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True)
                     
                     # Store result for this paper type
                     paper_type_results[paper_type] = {

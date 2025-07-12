@@ -9,6 +9,8 @@ import json
 import nacl.signing
 import nacl.encoding
 from nacl.exceptions import BadSignatureError
+
+from bot.config import SUBSCRIPTION_ONLY_NEW
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY, ADMIN_USER_ID
 from apps.apps import AppManager
 import aiohttp
@@ -693,7 +695,7 @@ class CeciliaBot(commands.Bot):
                         
                         logger.info(f"Debug processing Discord subscription: {category}/{topic} for user {user_id}")
                         result = await self.app_manager.essay_summarizer.summarize_and_push(
-                            category, topic, user_id, only_new=True, is_scheduled=True
+                            category, topic, user_id, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True
                         )
                         
                         if result['success']:
@@ -769,7 +771,7 @@ class CeciliaBot(commands.Bot):
                         
                         # Get papers for this topic
                         result = await self.app_manager.essay_summarizer.summarize_and_push(
-                            category, topic, user_id=None, only_new=True, is_scheduled=True
+                            category, topic, user_id=None, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True
                         )
                         
                         # Prepare papers for email

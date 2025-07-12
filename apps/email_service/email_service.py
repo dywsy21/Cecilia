@@ -288,16 +288,6 @@ class EmailService:
                 </div>
         """
         
-        # Add size warning if attachments were removed
-        if removed_attachments > 0:
-            html += f"""
-                <div class="size-warning">
-                    <h4>⚠️ 邮件大小限制提醒</h4>
-                    <p>为确保邮件能够正常发送，本次邮件已移除最后 <strong>{removed_attachments}</strong> 篇论文的PDF附件以控制邮件大小在50MB以内。</p>
-                    <p>您仍可通过每篇论文下方的"阅读原文"链接访问完整PDF文档。</p>
-                </div>
-            """
-        
         if papers:
             for i, paper in enumerate(papers, 1):
                 authors_str = ", ".join(paper.get('authors', []))
@@ -330,6 +320,16 @@ class EmailService:
                 <h3>📝 暂无新论文</h3>
                 <p>今日该主题暂无新论文发布，请明日继续关注。</p>
             </div>
+            """
+                
+        # Add size warning if attachments were removed
+        if removed_attachments > 0:
+            html += f"""
+                <div class="size-warning">
+                    <h4>⚠️ 邮件大小限制提醒</h4>
+                    <p>为确保邮件能够正常发送，本次邮件已移除最后 <strong>{removed_attachments}</strong> 篇论文的PDF附件以控制邮件大小在50MB以内。</p>
+                    <p>您仍可通过每篇论文下方的"阅读原文"链接访问完整PDF文档。</p>
+                </div>
             """
         
         footer_text = self.custom_footer if self.custom_footer else "感谢使用 Cecilia 研究助手"
