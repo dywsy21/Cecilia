@@ -515,7 +515,7 @@ class EssaySummarizer:
             headers = {"Content-Type": "application/json"}
             payload = {
                 "user_id": str(user_id),
-                "channel_id": "1190649951693316169",
+                # "channel_id": "1190649951693316169",
                 "message": message_data
             }
             
@@ -598,9 +598,9 @@ class EssaySummarizer:
             "footer": {
                 "text": f"类别: {category} • 主题: {topic} • Cecilia 研究助手 • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             },
-            "thumbnail": {
-                "url": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png"
-            }
+            # "thumbnail": {
+            #     "url": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png"
+            # }
         }
         
         return embed
