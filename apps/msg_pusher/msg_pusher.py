@@ -54,7 +54,8 @@ class MessagePusher:
                 return web.json_response({
                     "status": "success",
                     "message": "Message sent successfully",
-                    "message_id": result.get('message_id')
+                    "message_id": result.get('message_id'),
+                    "target_type": result.get('target_type')
                 }, status=200)
             else:
                 return web.json_response({
@@ -85,23 +86,23 @@ class MessagePusher:
             }, status=500)
     
     async def process_message(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process and send the message to Discord"""
+        """Process and send the message to Discord with natural target selection"""
         try:
             user_id = int(data['user_id'])
             message_data = data['message']
             channel_id = data.get('channel_id')
             priority = data.get('priority', 'normal')
             
-            # Use fallback channel if no channel_id provided
-            fallback_channel_id = "1190649951693316169"
-            
-            # Get user or channel
+            # Determine target based on whether channel_id is provided
             if channel_id:
+                # Channel was explicitly specified - send to channel
                 target = self.bot.get_channel(int(channel_id))
                 if not target:
                     return {"success": False, "error": f"Channel {channel_id} not found"}
+                target_type = "channel"
+                logger.info(f"Sending message to channel {channel_id}")
             else:
-                # Try to get user from cache first
+                # No channel specified - send to user via DM
                 target = self.bot.get_user(user_id)
                 
                 # If not in cache, try to fetch from Discord API
@@ -110,63 +111,47 @@ class MessagePusher:
                         target = await self.bot.fetch_user(user_id)
                         logger.info(f"Fetched user {user_id} from Discord API")
                     except discord.NotFound:
-                        logger.warning(f"User {user_id} not found, using fallback channel {fallback_channel_id}")
-                        target = self.bot.get_channel(int(fallback_channel_id))
-                        if not target:
-                            return {"success": False, "error": f"User {user_id} does not exist and fallback channel {fallback_channel_id} not found"}
+                        return {"success": False, "error": f"User {user_id} not found"}
                     except discord.Forbidden:
-                        logger.warning(f"Cannot access user {user_id}, using fallback channel {fallback_channel_id}")
-                        target = self.bot.get_channel(int(fallback_channel_id))
-                        if not target:
-                            return {"success": False, "error": f"Bot cannot access user {user_id} and fallback channel {fallback_channel_id} not found"}
+                        return {"success": False, "error": f"Bot cannot access user {user_id}"}
                     except Exception as e:
-                        logger.warning(f"Failed to fetch user {user_id}: {e}, using fallback channel {fallback_channel_id}")
-                        target = self.bot.get_channel(int(fallback_channel_id))
-                        if not target:
-                            return {"success": False, "error": f"Failed to fetch user {user_id} and fallback channel {fallback_channel_id} not found: {e}"}
+                        return {"success": False, "error": f"Failed to fetch user {user_id}: {e}"}
+                
+                target_type = "dm"
+                logger.info(f"Sending DM to user {user_id}")
             
             # Build Discord message
             discord_message = await self.build_discord_message(message_data)
             
+            # For channel messages, add user mention if needed
+            if target_type == "channel" and 'content' in discord_message:
+                # Add mention to make sure user sees the message in channel
+                if not discord_message['content'].startswith(f"<@{user_id}>"):
+                    discord_message['content'] = f"<@{user_id}> {discord_message['content']}"
+            elif target_type == "channel" and 'content' not in discord_message:
+                # If no content but we're in a channel, add mention
+                discord_message['content'] = f"<@{user_id}>"
+            
             # Send message
-            sent_message = await target.send(**discord_message)
+            try:
+                sent_message = await target.send(**discord_message)
+                logger.info(f"Message sent successfully to {target_type} {target} (ID: {sent_message.id})")
+                return {
+                    "success": True,
+                    "message_id": str(sent_message.id),
+                    "target": str(target),
+                    "target_type": target_type
+                }
+            except discord.Forbidden as e:
+                if target_type == "dm":
+                    return {"success": False, "error": "Cannot send DM to user. The user may have DMs disabled or doesn't share a server with the bot."}
+                else:
+                    return {"success": False, "error": f"Bot doesn't have permission to send messages in channel {target}"}
+            except discord.HTTPException as e:
+                return {"success": False, "error": f"Discord API error: {e}"}
             
-            logger.info(f"Message sent successfully to {target} (ID: {sent_message.id})")
-            return {
-                "success": True,
-                "message_id": str(sent_message.id),
-                "target": str(target)
-            }
-            
-        except discord.Forbidden as e:
-            # If DM fails, try fallback channel
-            if not channel_id:  # Only try fallback if we were originally trying DM
-                try:
-                    fallback_channel_id = "1190649951693316169"
-                    fallback_target = self.bot.get_channel(int(fallback_channel_id))
-                    if fallback_target:
-                        discord_message = await self.build_discord_message(message_data)
-                        # Add mention to the message content for fallback channel
-                        if 'content' in discord_message:
-                            discord_message['content'] = f"<@{user_id}> {discord_message['content']}"
-                        else:
-                            discord_message['content'] = f"<@{user_id}>"
-                        
-                        sent_message = await fallback_target.send(**discord_message)
-                        logger.info(f"Message sent to fallback channel {fallback_target} for user {user_id}")
-                        return {
-                            "success": True,
-                            "message_id": str(sent_message.id),
-                            "target": str(fallback_target),
-                            "fallback": True
-                        }
-                except Exception as fallback_error:
-                    logger.error(f"Fallback channel also failed: {fallback_error}")
-            
-            return {"success": False, "error": "Bot doesn't have permission to message this user/channel. The user may have DMs disabled or doesn't share a server with the bot."}
-        except discord.HTTPException as e:
-            return {"success": False, "error": f"Discord API error: {e}"}
         except Exception as e:
+            logger.error(f"Unexpected error in process_message: {e}")
             return {"success": False, "error": f"Unexpected error: {e}"}
     
     async def build_discord_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -203,6 +188,14 @@ class MessagePusher:
             # Add footer
             if 'footer' in embed_data:
                 embed.set_footer(text=embed_data['footer']['text'])
+            
+            # Add timestamp if present
+            if 'timestamp' in embed_data:
+                embed.timestamp = discord.utils.parse_time(embed_data['timestamp'])
+            
+            # Add thumbnail if present
+            if 'thumbnail' in embed_data and 'url' in embed_data['thumbnail']:
+                embed.set_thumbnail(url=embed_data['thumbnail']['url'])
             
             result['embed'] = embed
         
