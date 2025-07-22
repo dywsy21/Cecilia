@@ -14,6 +14,11 @@ const widget = {
     ollama: {
       endpoint: "ollama",
     },
+    // Direct Ollama API access
+    ollama_direct: {
+      endpoint: "api/tags",
+      url: "http://localhost:11434"
+    },
   },
 };
 

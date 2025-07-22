@@ -3,14 +3,8 @@ import aiohttp
 import psutil
 import logging
 import json
+import subprocess
 from typing import Dict, Optional
-
-try:
-    import GPUtil
-    GPU_AVAILABLE = True
-except ImportError:
-    GPU_AVAILABLE = False
-    print("Warning: GPUtil not available. GPU monitoring disabled.")
 
 logger = logging.getLogger(__name__)
 
@@ -76,33 +70,52 @@ class OllamaMonitor:
             return {'percent': 0.0, 'total_gb': 0.0, 'used_gb': 0.0, 'available_gb': 0.0}
     
     def get_gpu_usage(self) -> Dict:
-        """Get GPU usage if available"""
-        if not GPU_AVAILABLE:
-            return {'available': False, 'gpus': []}
-        
+        """Get GPU usage using nvidia-smi"""
         try:
-            gpus = GPUtil.getGPUs()
-            gpu_info = []
+            # Try to run nvidia-smi command
+            result = subprocess.run([
+                'nvidia-smi', 
+                '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu',
+                '--format=csv,noheader,nounits'
+            ], capture_output=True, text=True, timeout=5)
             
-            for gpu in gpus:
-                gpu_info.append({
-                    'id': gpu.id,
-                    'name': gpu.name,
-                    'load': round(gpu.load * 100, 1),  # Convert to percentage
-                    'memory_used': round(gpu.memoryUsed, 1),
-                    'memory_total': round(gpu.memoryTotal, 1),
-                    'memory_percent': round((gpu.memoryUsed / gpu.memoryTotal * 100), 1),
-                    'temperature': gpu.temperature if hasattr(gpu, 'temperature') else None
-                })
+            if result.returncode != 0:
+                return {'available': False, 'gpus': [], 'error': 'nvidia-smi failed'}
+            
+            gpus = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) >= 6:
+                        try:
+                            gpu_info = {
+                                'id': int(parts[0]),
+                                'name': parts[1],
+                                'load': float(parts[2]),
+                                'memory_used': float(parts[3]),
+                                'memory_total': float(parts[4]),
+                                'memory_percent': round((float(parts[3]) / float(parts[4]) * 100), 1),
+                                'temperature': float(parts[5]) if parts[5] != '[Not Supported]' else None
+                            }
+                            gpus.append(gpu_info)
+                        except (ValueError, IndexError) as e:
+                            logger.warning(f"Failed to parse GPU info: {parts}, error: {e}")
             
             return {
-                'available': True,
+                'available': len(gpus) > 0,
                 'count': len(gpus),
-                'gpus': gpu_info
+                'gpus': gpus
             }
+            
+        except subprocess.TimeoutExpired:
+            logger.warning("nvidia-smi command timed out")
+            return {'available': False, 'gpus': [], 'error': 'timeout'}
+        except FileNotFoundError:
+            logger.debug("nvidia-smi not found, no NVIDIA GPU available")
+            return {'available': False, 'gpus': [], 'error': 'nvidia-smi not found'}
         except Exception as e:
-            logger.error(f"Error getting GPU usage: {e}")
-            return {'available': False, 'gpus': []}
+            logger.error(f"Error getting GPU usage with nvidia-smi: {e}")
+            return {'available': False, 'gpus': [], 'error': str(e)}
     
     def get_ollama_process_info(self) -> Dict:
         """Get Ollama process information"""
