@@ -1,0 +1,30 @@
+# Sample Homepage service configuration for Cecilia Bot
+
+# Add this to your Homepage services.yaml file:
+
+- Bot Services:
+    - Cecilia Bot:
+        icon: cecilia.svg
+        href: http://localhost:8010/bot/health
+        description: Discord research assistant bot with essay summarization
+        widget:
+          type: cecilia
+          url: http://localhost:8010
+
+# If running on a different server, replace localhost with your server's IP/domain:
+# 
+# - Bot Services:
+#     - Cecilia Bot:
+#         icon: cecilia.svg
+#         href: http://your-server.com:8010/bot/health
+#         description: Discord research assistant bot with essay summarization
+#         widget:
+#           type: cecilia
+#           url: http://your-server.com:8010
+
+# Widget Features:
+# - Shows number of active services (Discord bot, essay summarizer, message pusher, Ollama)
+# - Displays system CPU usage percentage
+# - Shows GPU usage (if available)
+# - Displays Ollama service status
+# - Real-time monitoring of system resources

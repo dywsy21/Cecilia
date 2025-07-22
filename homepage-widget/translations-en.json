@@ -1,0 +1,18 @@
+{
+  "cecilia": {
+    "services": "Active Services",
+    "cpu_usage": "CPU Usage",
+    "gpu_usage": "GPU Usage", 
+    "ollama_status": "Ollama Status",
+    "uptime": "Uptime",
+    "commands_processed": "Commands Processed",
+    "guilds_count": "Discord Guilds",
+    "users_count": "Total Users",
+    "no_gpu": "No GPU",
+    "ollama_online": "Online",
+    "ollama_offline": "Offline",
+    "ollama_error": "Error",
+    "ollama_timeout": "Timeout",
+    "ollama_unknown": "Unknown"
+  }
+}

@@ -7,3 +7,5 @@ aiofiles>=23.1.0
 markitdown[all]
 secure-smtplib>=0.1.1
 markdown>=3.4.0
+psutil>=5.9.0
+GPUtil>=1.4.0

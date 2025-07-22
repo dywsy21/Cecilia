@@ -2,6 +2,7 @@ import asyncio
 import logging
 from .essay_summarizer.essay_summarizer import EssaySummarizer
 from .msg_pusher.msg_pusher import create_message_pusher
+from .ollama_monitor.ollama_monitor import OllamaMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class AppManager:
             self.msg_pusher = None
             self.bot_instance = bot_instance
             self.scheduler_task = None
+            self.ollama_monitor = OllamaMonitor()
             logger.info("AppManager initialized")
         except Exception as e:
             logger.error(f"Failed to initialize AppManager: {e}")
@@ -81,13 +83,49 @@ class AppManager:
             return f"Sorry, I couldn't summarize essays for '{topic}'. Error: {str(e)}"
     
     async def get_status(self) -> dict:
-        """Get status of all apps"""
-        return {
-            "essay_summarizer": "online",
-            "msg_pusher": "online" if self.msg_pusher else "not initialized",
-            "scheduler": "running" if self.scheduler_task and not self.scheduler_task.done() else "stopped",
-            "total_apps": 2
-        }
+        """Get status of all apps including Ollama"""
+        try:
+            # Get Ollama status
+            async with self.ollama_monitor as monitor:
+                ollama_status = await monitor.check_ollama_status()
+            
+            status = {
+                "essay_summarizer": "online",
+                "msg_pusher": "online" if self.msg_pusher else "not initialized",
+                "scheduler": "running" if self.scheduler_task and not self.scheduler_task.done() else "stopped",
+                "ollama": ollama_status.get('status', 'unknown'),
+                "ollama_models": ollama_status.get('models_count', 0),
+                "total_apps": 3  # Updated to include Ollama
+            }
+            return status
+        except Exception as e:
+            logger.error(f"Error getting status: {e}")
+            return {
+                "essay_summarizer": "online",
+                "msg_pusher": "online" if self.msg_pusher else "not initialized",
+                "scheduler": "running" if self.scheduler_task and not self.scheduler_task.done() else "stopped",
+                "ollama": "error",
+                "ollama_models": 0,
+                "total_apps": 3
+            }
+    
+    async def get_ollama_resources(self) -> dict:
+        """Get Ollama system resources and usage"""
+        try:
+            async with self.ollama_monitor as monitor:
+                resources = await monitor.get_full_status()
+            return resources
+        except Exception as e:
+            logger.error(f"Error getting Ollama resources: {e}")
+            return {
+                "ollama": {"status": "error"},
+                "system": {
+                    "cpu_percent": 0.0,
+                    "memory": {"percent": 0.0},
+                    "gpu": {"available": False, "gpus": []}
+                },
+                "ollama_processes": {"processes_found": 0, "total_cpu": 0.0, "total_memory_mb": 0.0}
+            }
     
     async def shutdown(self):
         """Gracefully shutdown all services"""

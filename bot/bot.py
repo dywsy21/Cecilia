@@ -29,6 +29,9 @@ class CeciliaBot(commands.Bot):
         self.webhook_app = None
         # Setup verification key
         self.verify_key = nacl.signing.VerifyKey(bytes.fromhex(PUBLIC_KEY))
+        # Stats tracking
+        self.start_time = time.time()
+        self.commands_processed = 0
 
     async def setup_hook(self):
         """Called when the bot is starting up"""
@@ -170,6 +173,10 @@ class CeciliaBot(commands.Bot):
         app.router.add_post('/bot/interactions', self.handle_interaction)
         app.router.add_get('/health', self.health_check)
         app.router.add_get('/bot/health', self.health_check)
+        # Add Homepage widget API endpoints
+        app.router.add_get('/status', self.get_status)
+        app.router.add_get('/stats', self.get_stats)
+        app.router.add_get('/ollama', self.get_ollama_resources)
         return app
 
     async def handle_interaction(self, request):
@@ -220,6 +227,9 @@ class CeciliaBot(commands.Bot):
                 command_data = data.get('data', {})
                 command_name = command_data.get('name')
                 logger.info(f"Received application command: {command_name}")
+                
+                # Increment commands processed counter
+                self.commands_processed += 1
                 
                 if command_name == 'hello':
                     user = data.get('member', {}).get('user', data.get('user', {}))
@@ -631,6 +641,62 @@ class CeciliaBot(commands.Bot):
             'verification': 'enabled',
             'public_key': PUBLIC_KEY[:8] + '...',  # Show first 8 chars for verification
         })
+
+    async def get_status(self, request):
+        """Get status of Cecilia services for Homepage widget"""
+        try:
+            status = await self.app_manager.get_status()
+            status['discord_bot'] = 'online' if self.is_ready() else 'offline'
+            return web.json_response(status)
+        except Exception as e:
+            logger.error(f"Error getting status: {e}")
+            return web.json_response({
+                'error': 'Failed to get status',
+                'discord_bot': 'error'
+            }, status=500)
+
+    async def get_stats(self, request):
+        """Get statistics of Cecilia services for Homepage widget"""
+        try:
+            # Calculate uptime
+            uptime_seconds = int(time.time() - self.start_time) if hasattr(self, 'start_time') else 0
+            
+            stats = {
+                'uptime': uptime_seconds,
+                'commands_processed': getattr(self, 'commands_processed', 0),
+                'guilds_count': len(self.guilds) if self.is_ready() else 0,
+                'users_count': sum(guild.member_count for guild in self.guilds) if self.is_ready() else 0
+            }
+            
+            return web.json_response(stats)
+        except Exception as e:
+            logger.error(f"Error getting stats: {e}")
+            return web.json_response({
+                'error': 'Failed to get stats',
+                'uptime': 0,
+                'commands_processed': 0,
+                'guilds_count': 0,
+                'users_count': 0
+            }, status=500)
+
+    async def get_ollama_resources(self, request):
+        """Get Ollama system resources for Homepage widget"""
+        try:
+            resources = await self.app_manager.get_ollama_resources()
+            return web.json_response(resources)
+        except Exception as e:
+            logger.error(f"Error getting Ollama resources: {e}")
+            return web.json_response({
+                'error': 'Failed to get Ollama resources',
+                'ollama': {'status': 'error'},
+                'system': {
+                    'cpu_percent': 0.0,
+                    'memory': {'percent': 0.0},
+                    'gpu': {'available': False, 'gpus': []}
+                },
+                'ollama_processes': {'processes_found': 0, 'total_cpu': 0.0, 'total_memory_mb': 0.0}
+            }, status=500)
+
     async def handle_debug_command(self, interaction_data, debug_type, user_id):
         """Handle admin debug command execution"""
         try:
