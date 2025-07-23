@@ -118,30 +118,61 @@ class OllamaMonitor:
             return {'available': False, 'gpus': [], 'error': str(e)}
     
     def get_ollama_process_info(self) -> Dict:
-        """Get Ollama process information"""
+        """Get Ollama and Cecilia process information"""
         try:
             ollama_processes = []
-            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info']):
+            cecilia_processes = []
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'cmdline']):
                 try:
-                    if 'ollama' in proc.info['name'].lower():
+                    proc_name = proc.info['name'].lower()
+                    cmdline = ' '.join(proc.info['cmdline'] or []).lower()
+                    
+                    # Check for Ollama processes
+                    if 'ollama' in proc_name:
                         ollama_processes.append({
                             'pid': proc.info['pid'],
                             'name': proc.info['name'],
                             'cpu_percent': proc.info['cpu_percent'],
                             'memory_mb': round(proc.info['memory_info'].rss / (1024**2), 1)
                         })
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    
+                    # Check for Cecilia processes (Python processes running main.py or bot.py)
+                    if ('python' in proc_name and 
+                        ('main.py' in cmdline or 'cecilia' in cmdline or 'bot.py' in cmdline)):
+                        cecilia_processes.append({
+                            'pid': proc.info['pid'],
+                            'name': proc.info['name'],
+                            'cpu_percent': proc.info['cpu_percent'],
+                            'memory_mb': round(proc.info['memory_info'].rss / (1024**2), 1),
+                            'cmdline': ' '.join(proc.info['cmdline'] or [])
+                        })
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
             
             return {
                 'processes_found': len(ollama_processes),
                 'processes': ollama_processes,
                 'total_cpu': sum(p['cpu_percent'] for p in ollama_processes),
-                'total_memory_mb': sum(p['memory_mb'] for p in ollama_processes)
+                'total_memory_mb': sum(p['memory_mb'] for p in ollama_processes),
+                'cecilia_processes_found': len(cecilia_processes),
+                'cecilia_processes': cecilia_processes,
+                'cecilia_total_cpu': sum(p['cpu_percent'] for p in cecilia_processes),
+                'cecilia_total_memory_mb': sum(p['memory_mb'] for p in cecilia_processes)
             }
         except Exception as e:
-            logger.error(f"Error getting Ollama process info: {e}")
-            return {'processes_found': 0, 'processes': [], 'total_cpu': 0.0, 'total_memory_mb': 0.0}
+            logger.error(f"Error getting process info: {e}")
+            return {
+                'processes_found': 0, 
+                'processes': [], 
+                'total_cpu': 0.0, 
+                'total_memory_mb': 0.0,
+                'cecilia_processes_found': 0,
+                'cecilia_processes': [],
+                'cecilia_total_cpu': 0.0,
+                'cecilia_total_memory_mb': 0.0
+            }
     
     async def get_full_status(self) -> Dict:
         """Get comprehensive Ollama and system status"""

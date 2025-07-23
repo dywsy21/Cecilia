@@ -9,6 +9,7 @@
     "guilds_count": "Discord Guilds",
     "users_count": "Total Users",
     "no_gpu": "N/A",
+    "offline": "Offline",
     "ollama_online": "Online",
     "ollama_offline": "Offline",
     "ollama_error": "Error",

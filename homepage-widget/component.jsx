@@ -32,8 +32,8 @@ export default function Component({ service }) {
     status === "online" || status === "running"
   ).length;
 
-  // Get CPU usage from system monitoring
-  const cpuUsage = ollamaData?.system?.cpu_percent || 0;
+  // Get Cecilia process CPU usage instead of system-wide CPU
+  const ceciliaCpuUsage = ollamaData?.ollama_processes?.cecilia_total_cpu || 0;
 
   // Get GPU usage (first GPU if available)
   const gpuData = ollamaData?.system?.gpu;
@@ -49,6 +49,17 @@ export default function Component({ service }) {
     ollamaStatus = ollamaData.ollama.status;
   }
 
+  // Check if Cecilia is online (for status indicator)
+  const isOnline = statusData?.discord_bot === "online" && activeServices > 0;
+
+  if (!isOnline) {
+    return (
+      <Container service={service}>
+        <Block label="widget.status" value={t("cecilia.offline")} />
+      </Container>
+    );
+  }
+
   return (
     <Container service={service}>
             <Block 
@@ -57,7 +68,7 @@ export default function Component({ service }) {
             />
             <Block 
               label="cecilia.cpu_usage" 
-              value={t("common.percent", { value: cpuUsage })} 
+              value={t("common.percent", { value: ceciliaCpuUsage })} 
             />
             <Block 
               label="cecilia.gpu_usage" 
