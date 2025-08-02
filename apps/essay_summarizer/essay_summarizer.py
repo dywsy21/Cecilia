@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
 
-from bot.config import SUBSCRIPTION_ONLY_NEW
+from bot.config import OLLAMA_BASE_URL, OLLAMA_MODEL, SUBSCRIPTION_ONLY_NEW
 from ..email_service.email_service import EmailService
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class EssaySummarizer:
     def __init__(self):
         try:
             self.arxiv_base_url = "https://export.arxiv.org/api/query"
-            self.ollima_url = "http://localhost:11434/api/generate"
+            self.ollima_url = OLLAMA_BASE_URL + "/api/generate"
             self.data_dir = Path("data/essay_summarizer")
             self.subscriptions_file = self.data_dir / "subscriptions.json"
             self.email_targets_file = self.data_dir / "email_targets.json"
@@ -392,7 +392,7 @@ class EssaySummarizer:
 """
 
             payload = {
-                "model": "deepseek-r1:32b",
+                "model": OLLAMA_MODEL,
                 "prompt": prompt,
                 "stream": False
             }
@@ -422,7 +422,7 @@ class EssaySummarizer:
         """Check if ollama service is running"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get("http://localhost:11434/api/tags", timeout=5) as response:
+                async with session.get(OLLAMA_BASE_URL + "/api/tags", timeout=5) as response:
                     if response.status == 200:
                         logger.info("ollima service is running")
                         return True
@@ -891,7 +891,7 @@ class EssaySummarizer:
                 },
                 {
                     "name": "🛠️ 技术信息", 
-                    "value": "🤖 AI模型: **DeepSeek-R1-32B**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
+                    "value": f"🤖 AI模型: **{OLLAMA_MODEL}**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
                     "inline": True
                 }
             ],

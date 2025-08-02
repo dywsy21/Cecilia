@@ -6,12 +6,14 @@ import json
 import subprocess
 from typing import Dict, Optional
 
+from bot.config import OLLAMA_BASE_URL
+
 logger = logging.getLogger(__name__)
 
 class OllamaMonitor:
     """Monitor Ollama service and system resources"""
     
-    def __init__(self, ollama_url: str = "http://localhost:11434"):
+    def __init__(self, ollama_url: str = OLLAMA_BASE_URL):
         self.ollama_url = ollama_url.rstrip('/')
         self.session: Optional[aiohttp.ClientSession] = None
         
