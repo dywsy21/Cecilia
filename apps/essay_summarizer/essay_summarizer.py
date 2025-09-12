@@ -3,18 +3,14 @@ import aiohttp
 import aiofiles
 import json
 import logging
-import os
 import subprocess
-import tempfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
-import re
 
-from apps import llm_handler
-from bot.config import OLLAMA_BASE_URL, SUBSCRIPTION_ONLY_NEW
+from bot.config import SUBSCRIPTION_ONLY_NEW
 from ..email_service.email_service import EmailService
 from ..llm_handler.llm_handler import LLMHandler
 
@@ -335,7 +331,7 @@ class EssaySummarizer:
             if 'pdf_path' in locals() and pdf_path.exists():
                 try:
                     pdf_path.unlink()
-                except:
+                except Exception:
                     pass
             return None
     
@@ -373,21 +369,6 @@ class EssaySummarizer:
         except Exception as e:
             logger.error(f"Error summarizing with LLM: {e}")
             return None
-    
-    async def check_ollama_service(self) -> bool:
-        """Check if ollama service is running"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(OLLAMA_BASE_URL + "/api/tags", timeout=5) as response:
-                    if response.status == 200:
-                        logger.info("ollima service is running")
-                        return True
-                    else:
-                        logger.error("ollima service returned non-200 status")
-                        return False
-        except Exception as e:
-            logger.error(f"ollima service check failed: {e}")
-            return False
     
     async def check_llm_service(self) -> bool:
         """Check if the LLM service is running"""
@@ -624,11 +605,11 @@ class EssaySummarizer:
             for i, paper in enumerate(papers, 1):
                 logger.debug(f"Paper {i}: {paper['id']} - {paper['title'][:100]}...")
             
-            # Check ollama service
-            logger.info("Checking ollama service availability...")
-            if not await self.check_ollama_service():
-                logger.error("ollama service check failed")
-                return {"success": False, "error": "olloma service is not running. Please ensure olloma serve is running."}
+            # Check LLM service
+            logger.info(f"Checking {self.llm_handler.provider} service availability...")
+            if not await self.check_llm_service():
+                logger.error(f"{self.llm_handler.provider} service check failed")
+                return {"success": False, "error": f"{self.llm_handler.provider} service is not running. Please ensure {self.llm_handler.provider} service is available."}
             
             summarized_papers = []
             processed_count = 0
@@ -701,9 +682,9 @@ class EssaySummarizer:
                         logger.warning(f"Could not convert PDF to markdown for paper {paper_id}, skipping")
                         continue
                     
-                    # Summarize with AI
+                    # Summarize with LLM
                     logger.debug(f"Step 3/3: Generating AI summary for paper {paper_id}")
-                    summary = await self.summarize_with_ollama(markdown_content, paper['title'])
+                    summary = await self.summarize_with_llm(markdown_content, paper['title'])
                     if not summary:
                         logger.warning(f"Could not generate summary for paper {paper_id}, skipping")
                         continue
@@ -890,7 +871,7 @@ class EssaySummarizer:
         subscriptions = self._cleanup_invalid_subscriptions()
 
         if user_id not in subscriptions:
-            return f"❌ You have no subscriptions to remove."
+            return "❌ You have no subscriptions to remove."
 
         # Find and remove subscription
         original_count = len(subscriptions[user_id])
@@ -1012,9 +993,16 @@ class EssaySummarizer:
                     
                 except Exception as e:
                     logger.error(f"Error processing paper type {paper_type}: {e}")
+                    # Handle case where category/topic aren't set yet
+                    if '.' in paper_type:
+                        error_category, error_topic = paper_type.split('.', 1)
+                    else:
+                        error_category = 'all'
+                        error_topic = paper_type
+                    
                     paper_type_results[paper_type] = {
-                        'category': category if 'category' in locals() else 'unknown',
-                        'topic': topic if 'topic' in locals() else paper_type,
+                        'category': error_category,
+                        'topic': error_topic,
                         'papers': [],
                         'stats': {'papers_count': 0, 'new_papers': 0, 'cached_papers': 0},
                         'success': False,
