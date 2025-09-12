@@ -622,7 +622,7 @@ class EssaySummarizer:
                 continue
 
     async def summarize_and_push(self, category: str, topic: str, user_id: Optional[str] = None, only_new: bool = False, is_scheduled: bool = False) -> Dict:
-        """Main workflow for summarizing papers and pushing results"""
+        """Main workflow for summarizing papers and pushing results with parallel processing"""
         try:
             logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id}, only_new: {only_new}, scheduled: {is_scheduled})")
             
@@ -634,8 +634,6 @@ class EssaySummarizer:
                 return {"success": False, "error": f"No papers found for category: {category}, topic: {topic}"}
             
             logger.info(f"Found {len(papers)} papers for category '{category}', topic '{topic}'")
-            for i, paper in enumerate(papers, 1):
-                logger.debug(f"Paper {i}: {paper['id']} - {paper['title'][:100]}...")
             
             # Check LLM service
             logger.info(f"Checking {self.llm_handler.provider} service availability...")
@@ -643,25 +641,26 @@ class EssaySummarizer:
                 logger.error(f"{self.llm_handler.provider} service check failed")
                 return {"success": False, "error": f"{self.llm_handler.provider} service is not running. Please ensure {self.llm_handler.provider} service is available."}
             
+            # Categorize papers: already processed vs need processing
             summarized_papers = []
-            processed_count = 0
+            papers_to_process = []
             reused_count = 0
             
             for i, paper in enumerate(papers, 1):
                 try:
                     paper_id = paper['id']
-                    logger.info(f"Processing paper {i}/{len(papers)}: {paper_id}")
+                    logger.debug(f"Categorizing paper {i}/{len(papers)}: {paper_id}")
                     
                     # Different logic for scheduled vs instant requests
                     if is_scheduled:
                         # For scheduled runs: skip papers processed before today
                         if self._was_paper_processed_before_today(paper_id) and SUBSCRIPTION_ONLY_NEW:
-                            logger.info(f"Skipping paper {paper_id} - processed before today")
+                            logger.debug(f"Skipping paper {paper_id} - processed before today")
                             continue
                         
-                        # If processed, reuse the summary but still include in results
+                        # If processed today, reuse the summary
                         if self._is_paper_processed(paper_id):
-                            logger.info(f"Paper {paper_id} processed - reusing summary")
+                            logger.debug(f"Paper {paper_id} already processed today - reusing summary")
                             existing_summary = await self._load_existing_summary(paper_id)
                             if existing_summary:
                                 summarized_papers.append({
@@ -672,18 +671,19 @@ class EssaySummarizer:
                                     'categories': existing_summary.get('categories', [])
                                 })
                                 reused_count += 1
-                                logger.info(f"Reused today's summary for paper {paper_id}")
                                 continue
                         
-                        # If not processed at all, proceed to process
+                        # If not processed at all, add to processing queue
+                        papers_to_process.append(paper)
+                        
                     else:
                         # For instant requests: include all papers, but reuse summaries if available
                         if self._is_paper_processed(paper_id):
                             if only_new:
-                                logger.info(f"Skipping already processed paper {paper_id} (only_new=True)")
+                                logger.debug(f"Skipping already processed paper {paper_id} (only_new=True)")
                                 continue
                             else:
-                                logger.info(f"Loading existing summary for paper {paper_id} (only_new=False)")
+                                logger.debug(f"Loading existing summary for paper {paper_id} (only_new=False)")
                                 existing_summary = await self._load_existing_summary(paper_id)
                                 
                                 if existing_summary:
@@ -695,70 +695,44 @@ class EssaySummarizer:
                                         'categories': existing_summary.get('categories', [])
                                     })
                                     reused_count += 1
-                                    logger.info(f"Reused existing summary for paper {paper_id}")
                                     continue
                                 else:
                                     logger.warning(f"Paper {paper_id} marked as processed but summary not found, reprocessing")
-                    
-                    # Download PDF
-                    logger.debug(f"Step 1/3: Downloading PDF for paper {paper_id}")
-                    pdf_path = await self.download_pdf(paper.get('pdf_url', ''), paper_id)
-                    if not pdf_path:
-                        logger.warning(f"Could not download PDF for paper {paper_id}, skipping")
-                        continue
-                    
-                    # Convert to markdown
-                    logger.debug(f"Step 2/3: Converting PDF to markdown for paper {paper_id}")
-                    markdown_content = await self.pdf_to_markdown(pdf_path)
-                    if not markdown_content:
-                        logger.warning(f"Could not convert PDF to markdown for paper {paper_id}, skipping")
-                        continue
-                    
-                    # Summarize with LLM
-                    logger.debug(f"Step 3/3: Generating AI summary for paper {paper_id}")
-                    summary = await self.summarize_with_llm(markdown_content, paper['title'])
-                    if not summary:
-                        logger.warning(f"Could not generate summary for paper {paper_id}, skipping")
-                        continue
-                    
-                    # Save summary
-                    logger.debug(f"Saving summary for paper {paper_id}")
-                    await self._save_paper_summary(paper, summary)
-                    
-                    # Add to results
-                    summarized_papers.append({
-                        'title': paper['title'],
-                        'authors': paper['authors'],
-                        'summary': summary,
-                        'pdf_url': paper.get('pdf_url', ''),
-                        'categories': paper.get('categories', [])
-                    })
-                    
-                    processed_count += 1
-                    logger.info(f"Successfully processed paper {i}/{len(papers)}: {paper['title'][:50]}...")
-                    
-                    # Add small delay between papers to be nice to APIs
-                    await asyncio.sleep(1)
-                    
+                        
+                        # Add to processing queue
+                        papers_to_process.append(paper)
+                        
                 except Exception as e:
-                    logger.error(f"Error processing paper {paper.get('id', 'unknown')}: {e}")
-                    logger.exception("Full traceback for paper processing error:")
+                    logger.error(f"Error categorizing paper {paper.get('id', 'unknown')}: {e}")
                     continue
+            
+            logger.info(f"Categorization complete: {len(papers_to_process)} papers to process, {reused_count} existing summaries to reuse")
+            
+            # Process papers in parallel if there are any to process
+            newly_processed_papers = []
+            if papers_to_process:
+                logger.info(f"Starting parallel processing of {len(papers_to_process)} papers...")
+                newly_processed_papers = await self._process_papers_parallel(papers_to_process, max_concurrent=5)
+                logger.info(f"Parallel processing completed: {len(newly_processed_papers)} papers successfully processed")
+            
+            # Combine results
+            all_summarized_papers = summarized_papers + newly_processed_papers
+            processed_count = len(newly_processed_papers)
             
             logger.info(f"Processing complete: {processed_count} new papers processed, {reused_count} existing summaries reused")
             
             # Create and send embeds if we have papers
-            if summarized_papers:
-                logger.info(f"Creating and sending {len(summarized_papers)} embed messages")
+            if all_summarized_papers:
+                logger.info(f"Creating and sending {len(all_summarized_papers)} embed messages")
                 
                 if user_id:
                     # Create header embed
-                    header_embed = self._create_summary_header_embed(category, topic, len(summarized_papers), processed_count, reused_count, only_new)
+                    header_embed = self._create_summary_header_embed(category, topic, len(all_summarized_papers), processed_count, reused_count, only_new)
                     
                     # Create individual paper embeds
                     paper_embeds = []
-                    for i, paper in enumerate(summarized_papers, 1):
-                        paper_embed = self._create_paper_embed(paper, i, len(summarized_papers), category, topic)
+                    for i, paper in enumerate(all_summarized_papers, 1):
+                        paper_embed = self._create_paper_embed(paper, i, len(all_summarized_papers), category, topic)
                         paper_embeds.append(paper_embed)
                     
                     # Combine all embeds (header + papers)
@@ -770,11 +744,11 @@ class EssaySummarizer:
                 
                 return {
                     "success": True,
-                    "message": f"Found {len(summarized_papers)} papers for category '{category}', topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
-                    "papers_count": len(summarized_papers),
+                    "message": f"Found {len(all_summarized_papers)} papers for category '{category}', topic '{topic}' ({processed_count} newly processed, {reused_count} from cache)",
+                    "papers_count": len(all_summarized_papers),
                     "new_papers": processed_count,
                     "cached_papers": reused_count,
-                    "papers": summarized_papers
+                    "papers": all_summarized_papers
                 }
             else:
                 # Handle case where no papers are found (especially for only_new=True)
@@ -1141,3 +1115,84 @@ class EssaySummarizer:
                 
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
+
+    async def _process_paper_pipeline(self, paper: Dict, semaphore: asyncio.Semaphore) -> Optional[Dict]:
+        """Process a single paper through the complete pipeline with concurrency control"""
+        async with semaphore:
+            try:
+                paper_id = paper['id']
+                logger.info(f"Starting pipeline for paper {paper_id}")
+                
+                # Step 1: Download PDF
+                logger.debug(f"Downloading PDF for paper {paper_id}")
+                pdf_path = await self.download_pdf(paper.get('pdf_url', ''), paper_id)
+                if not pdf_path:
+                    logger.warning(f"Could not download PDF for paper {paper_id}")
+                    return None
+                
+                # Step 2: Convert to markdown
+                logger.debug(f"Converting PDF to markdown for paper {paper_id}")
+                markdown_content = await self.pdf_to_markdown(pdf_path)
+                if not markdown_content:
+                    logger.warning(f"Could not convert PDF to markdown for paper {paper_id}")
+                    return None
+                
+                # Step 3: Summarize with LLM
+                logger.debug(f"Generating AI summary for paper {paper_id}")
+                summary = await self.summarize_with_llm(markdown_content, paper['title'])
+                if not summary:
+                    logger.warning(f"Could not generate summary for paper {paper_id}")
+                    return None
+                
+                # Step 4: Save summary
+                logger.debug(f"Saving summary for paper {paper_id}")
+                await self._save_paper_summary(paper, summary)
+                
+                logger.info(f"Successfully completed pipeline for paper {paper_id}")
+                return {
+                    'title': paper['title'],
+                    'authors': paper['authors'],
+                    'summary': summary,
+                    'pdf_url': paper.get('pdf_url', ''),
+                    'categories': paper.get('categories', []),
+                    'id': paper_id
+                }
+                
+            except Exception as e:
+                logger.error(f"Error in pipeline for paper {paper.get('id', 'unknown')}: {e}")
+                return None
+
+    async def _process_papers_parallel(self, papers_to_process: List[Dict], max_concurrent: int = 2) -> List[Dict]:
+        """Process multiple papers in parallel with controlled concurrency"""
+        if not papers_to_process:
+            return []
+        
+        logger.info(f"Starting parallel processing of {len(papers_to_process)} papers with max {max_concurrent} concurrent tasks")
+        
+        # Create semaphore to limit concurrent downloads/processing
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        # Create tasks for all papers
+        tasks = []
+        for paper in papers_to_process:
+            task = asyncio.create_task(self._process_paper_pipeline(paper, semaphore))
+            tasks.append(task)
+        
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out None results and exceptions
+        successful_papers = []
+        failed_count = 0
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Task {i} failed with exception: {result}")
+                failed_count += 1
+            elif result is not None:
+                successful_papers.append(result)
+            else:
+                failed_count += 1
+        
+        logger.info(f"Parallel processing completed: {len(successful_papers)} successful, {failed_count} failed")
+        return successful_papers
