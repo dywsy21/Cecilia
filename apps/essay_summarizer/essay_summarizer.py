@@ -253,7 +253,7 @@ class EssaySummarizer:
             newly_processed_papers = []
             if papers_to_process:
                 logger.info(f"Starting parallel processing of {len(papers_to_process)} papers...")
-                newly_processed_papers = await self._process_papers_parallel(papers_to_process, max_concurrent=5)
+                newly_processed_papers = await self._process_papers_parallel(papers_to_process)
                 logger.info(f"Parallel processing completed: {len(newly_processed_papers)} papers successfully processed")
             
             # Combine results
@@ -716,7 +716,7 @@ class EssaySummarizer:
                 logger.error(f"Error in pipeline for paper {paper.get('id', 'unknown')}: {e}")
                 return None
 
-    async def _process_papers_parallel(self, papers_to_process: List[Dict], max_concurrent: int = 2) -> List[Dict]:
+    async def _process_papers_parallel(self, papers_to_process: List[Dict], max_concurrent: int = 3) -> List[Dict]:
         """Process multiple papers in parallel with controlled concurrency"""
         if not papers_to_process:
             return []

@@ -96,29 +96,33 @@ class LLMHandler:
     def _create_summarization_prompt(self, paper_content: str, paper_title: str) -> str:
         """Create the summarization prompt"""
         return f"""请为这篇研究论文提供清晰简洁的总结。重点关注：
-1. 主要研究问题或问题
+1. 主要研究问题
 2. 关键方法或途径
 3. 主要发现或贡献
 4. 实际意义或应用
 
-总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
+以下是总结的格式要求：使用"- **大点:** 内容..."的形式撰写总结，一大点对应一个"- **大点:** 内容..."。举个例子："- **主要研究问题：**......"
 
-总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。
+总结应该便于一般读者理解，应该非常简短并保持重点，保持在300字以内。**请用中文而不是英文撰写回答!**
+
+总结应该使用正规的markdown格式书写(特别注意: 每个以一个或多个#开头的各级标题后必须空两行再跟这一级标题的文字内容!)，条理清晰，但你不需将文本包在```markdown代码框中，并且不要使用表格。
 
 论文标题：{paper_title}
 
 论文内容：
-{paper_content[:15000]}
+{paper_content[:30000]}
 
 再重申一次，请为这篇研究论文提供清晰简洁的总结。重点关注：
-1. 主要研究问题或问题
+1. 主要研究问题
 2. 关键方法或途径
 3. 主要发现或贡献
 4. 实际意义或应用
 
-总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
+以下是总结的格式要求：使用"- **大点:** 内容..."的形式撰写总结，一大点对应一个"- **大点:** 内容..."。举个例子："- **主要研究问题：**......"
 
-总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。"""
+总结应该便于一般读者理解，应该非常简短并保持重点，保持在300字以内。**请用中文而不是英文撰写回答!**
+
+总结应该使用正规的markdown格式书写(特别注意: 每个以一个或多个#开头的各级标题后必须空两行再跟这一级标题的文字内容!)，条理清晰，但你不需将文本包在```markdown代码框中，并且不要使用表格。"""
     
     async def _summarize_with_ollama(self, paper_content: str, paper_title: str) -> Optional[str]:
         """Summarize paper content using Ollama"""
@@ -189,7 +193,7 @@ class LLMHandler:
                 async with session.post(f"{self.base_url}/chat/completions", 
                                       headers=headers, 
                                       json=payload, 
-                                      timeout=60) as response:
+                                      timeout=300) as response:
                     if response.status == 200:
                         result = await response.json()
                         if 'choices' in result and len(result['choices']) > 0:
