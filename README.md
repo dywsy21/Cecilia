@@ -74,7 +74,7 @@ An example of '[CATEGORY].[TOPIC]' will be 'cs.ai'.
 
 #### Email Notification System
 
-**Configuration:** Configure your preferred LLM provider in `bot/config.py`:
+**Configuration:** Configure your preferred LLM provider in `bot/config.py` (copy bot/config-sample.py to bot/config.py first):
 
 ```python
 # Choose your LLM provider
