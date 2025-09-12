@@ -1,8 +1,12 @@
 import asyncio
 import json
 import logging
+import asyncio
+import logging
+import json
 from pathlib import Path
 from apps.email_service.email_service import EmailService
+from apps.llm_handler.llm_handler import LLMHandler
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -546,9 +550,94 @@ async def cleanup_test_files():
     except Exception as e:
         print(f"⚠️  Warning: Could not clean up test files: {e}")
 
+async def test_llm_configuration():
+    """Test LLM configuration and connectivity"""
+    print("\n" + "="*50)
+    print("=== Testing LLM Configuration ===")
+    print("="*50)
+    
+    try:
+        llm_handler = LLMHandler()
+        provider_info = llm_handler.get_provider_info()
+        
+        print(f"🤖 LLM Provider: {provider_info['provider']}")
+        print(f"📱 Model: {provider_info['model']}")
+        print(f"🌐 Base URL: {provider_info['base_url']}")
+        
+        if provider_info['provider'] == 'OPENAI':
+            if provider_info['has_api_key']:
+                print("✅ API Key configured")
+            else:
+                print("❌ API Key not configured")
+                return False
+        
+        print("🔄 Testing LLM service connectivity...")
+        is_available = await llm_handler.check_service()
+        
+        if is_available:
+            print(f"✅ {provider_info['provider']} service is accessible")
+            
+            # Test a simple summarization
+            print("📝 Testing paper summarization...")
+            test_content = """
+            This is a test paper about artificial intelligence and machine learning.
+            It discusses various approaches to neural networks and their applications.
+            The paper introduces a novel architecture that improves performance by 20%.
+            """
+            test_summary = await llm_handler.summarize_paper(test_content, "Test AI Paper")
+            
+            if test_summary:
+                print(f"✅ LLM summarization test successful")
+                print(f"📄 Summary length: {len(test_summary)} characters")
+                return True
+            else:
+                print("❌ LLM summarization test failed")
+                return False
+        else:
+            print(f"❌ {provider_info['provider']} service is not accessible")
+            return False
+            
+    except Exception as e:
+        print(f"❌ LLM configuration test failed: {e}")
+        return False
+
 async def main():
     """Main test function with comprehensive email testing including new features"""
     print("🤖 Cecilia Email Service Test Suite - Advanced Edition")
+    print("Testing email functionality with LLM integration")
+    
+    # Test basic email configuration
+    test_email_config()
+    
+    # Test LLM configuration
+    llm_ok = await test_llm_configuration()
+    if not llm_ok:
+        print("⚠️  LLM tests failed, but email tests can still continue")
+    
+    # Create sample email targets if needed
+    create_sample_email_targets()
+    
+    # Test basic email functionality
+    await test_simple_email()
+    
+    # Test email with papers and attachments
+    await test_email_with_papers()
+    
+    # Test multiple paper types
+    await test_multiple_paper_types()
+    
+    # Test SMTP connectivity
+    await test_email_configuration_connectivity()
+    
+    # Cleanup test files
+    await cleanup_test_files()
+    
+    print("\n" + "="*50)
+    print("=== Email Test Suite Complete ===")
+    print("="*50)
+    print("✅ All email tests completed!")
+    print("📧 Check your email inbox for test messages")
+    print("🔧 Adjust configuration in bot/auths.py and data/essay_summarizer/email_targets.json as needed")
     print("="*60)
     
     test_results = {
@@ -556,7 +645,8 @@ async def main():
         'connectivity': False,
         'simple_email': False,
         'papers_email': False,
-        'multiple_paper_types': False
+        'multiple_paper_types': False,
+        'llm_configuration': False
     }
     
     try:
@@ -590,6 +680,9 @@ async def main():
         
         # Test 5: Multiple paper types (NEW FEATURE)
         test_results['multiple_paper_types'] = await test_multiple_paper_types()
+        
+        # Test 6: LLM configuration and connectivity
+        test_results['llm_configuration'] = await test_llm_configuration()
         
     finally:
         # Cleanup

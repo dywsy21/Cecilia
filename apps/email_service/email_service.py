@@ -15,7 +15,6 @@ from bot.auths import (
     EMAIL_SMTP_LOGGER, EMAIL_SMTP_TLS_REJECT_UNAUTH,
     EMAIL_SMTP_IGNORE_TLS, CUSTOM_EMAIL_FOOTER
 )
-from bot.config import OLLAMA_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +337,7 @@ class EmailService:
                 <div class="footer">
                     <p>{footer_text}</p>
                     <p>🤖 本邮件由 Cecilia Discord Bot 自动发送</p>
-                    <p>📡 数据来源: ArXiv • AI模型: {OLLAMA_MODEL} </p>
+                    <p>📡 数据来源: ArXiv • AI模型: LLM </p>
                 </div>
             </div>
         </body>

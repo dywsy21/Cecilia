@@ -11,9 +11,11 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
+import re
 
-from bot.config import OLLAMA_BASE_URL, OLLAMA_MODEL, SUBSCRIPTION_ONLY_NEW
+from bot.config import SUBSCRIPTION_ONLY_NEW
 from ..email_service.email_service import EmailService
+from ..llm_handler.llm_handler import LLMHandler
 
 logger = logging.getLogger(__name__)
 
@@ -22,42 +24,36 @@ class EssaySummarizer:
     
     def __init__(self):
         try:
-            self.arxiv_base_url = "https://export.arxiv.org/api/query"
-            self.ollima_url = OLLAMA_BASE_URL + "/api/generate"
-            self.data_dir = Path("data/essay_summarizer")
-            self.subscriptions_file = self.data_dir / "subscriptions.json"
-            self.email_targets_file = self.data_dir / "email_targets.json"
-            self.processed_papers_dir = self.data_dir / "processed"
-            self.summaries_dir = self.data_dir / "summaries"
+            # Initialize directory structure
+            self.base_dir = Path("data/essay_summarizer")
+            self.processed_papers_dir = self.base_dir / "processed"
+            self.summaries_dir = self.base_dir / "summaries"
+            self.subscriptions_file = self.base_dir / "subscriptions.json"
+            self.email_targets_file = self.base_dir / "email_targets.json"
             
-            # Create directories
-            self.data_dir.mkdir(parents=True, exist_ok=True)
+            # Create directories if they don't exist
+            self.base_dir.mkdir(parents=True, exist_ok=True)
             self.processed_papers_dir.mkdir(parents=True, exist_ok=True)
             self.summaries_dir.mkdir(parents=True, exist_ok=True)
             
-            # Initialize subscriptions file if it doesn't exist
-            if not self.subscriptions_file.exists():
-                self._save_subscriptions({})
-            
-            # Initialize email targets file if it doesn't exist
-            if not self.email_targets_file.exists():
-                self._save_email_targets({})
-            
-            self.app_manager = None  # Will be set by AppManager
+            # Initialize LLM handler and email service
+            self.llm_handler = LLMHandler()
             self.email_service = EmailService()
-            logger.info("EssaySummarizer initialized with email support")
+            
+            # App manager reference (set by app manager)
+            self.app_manager = None
+            
+            logger.info("EssaySummarizer initialized successfully")
+            
         except PermissionError as e:
-            logger.error(f"Permission denied creating data directories: {e}")
-            from ..apps import CeciliaServiceError
-            raise CeciliaServiceError(f"Cannot create data directories: {e}")
+            logger.error(f"Permission denied when creating directories: {e}")
+            raise
         except OSError as e:
-            logger.error(f"OS error initializing EssaySummarizer: {e}")
-            from ..apps import CeciliaServiceError
-            raise CeciliaServiceError(f"System error initializing EssaySummarizer: {e}")
+            logger.error(f"OS error when initializing essay summarizer: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Failed to initialize EssaySummarizer: {e}")
-            from ..apps import CeciliaServiceError
-            raise CeciliaServiceError(f"Cannot initialize EssaySummarizer: {e}")
+            logger.error(f"Unexpected error initializing essay summarizer: {e}")
+            raise
 
     def set_app_manager(self, app_manager):
         """Set reference to AppManager for message pushing"""
@@ -377,6 +373,8 @@ class EssaySummarizer:
 
 总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
 
+总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。
+
 论文标题：{paper_title}
 
 论文内容：
@@ -389,6 +387,8 @@ class EssaySummarizer:
 4. 实际意义或应用
 
 总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
+
+总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。
 """
 
             payload = {
@@ -418,6 +418,14 @@ class EssaySummarizer:
             logger.error(f"Error summarizing with ollama: {e}")
             return None
     
+    async def summarize_with_llm(self, paper_content: str, paper_title: str) -> Optional[str]:
+        """Summarize paper content using the configured LLM provider"""
+        try:
+            return await self.llm_handler.summarize_paper(paper_content, paper_title)
+        except Exception as e:
+            logger.error(f"Error summarizing with LLM: {e}")
+            return None
+    
     async def check_ollama_service(self) -> bool:
         """Check if ollama service is running"""
         try:
@@ -431,6 +439,14 @@ class EssaySummarizer:
                         return False
         except Exception as e:
             logger.error(f"ollima service check failed: {e}")
+            return False
+    
+    async def check_llm_service(self) -> bool:
+        """Check if the LLM service is running"""
+        try:
+            return await self.llm_handler.check_service()
+        except Exception as e:
+            logger.error(f"LLM service check failed: {e}")
             return False
     
     def _get_paper_hash(self, paper_id: str) -> str:
@@ -644,7 +660,7 @@ class EssaySummarizer:
                 logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
                 continue
 
-    async def summarize_and_push(self, category: str, topic: str, user_id: str = None, only_new: bool = False, is_scheduled: bool = False) -> Dict:
+    async def summarize_and_push(self, category: str, topic: str, user_id: Optional[str] = None, only_new: bool = False, is_scheduled: bool = False) -> Dict:
         """Main workflow for summarizing papers and pushing results"""
         try:
             logger.info(f"Starting summarization workflow for category: '{category}', topic: '{topic}' (user: {user_id}, only_new: {only_new}, scheduled: {is_scheduled})")
@@ -891,7 +907,7 @@ class EssaySummarizer:
                 },
                 {
                     "name": "🛠️ 技术信息", 
-                    "value": f"🤖 AI模型: **{OLLAMA_MODEL}**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
+                    "value": f"🤖 AI模型: **{self.llm_handler.model}**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
                     "inline": True
                 }
             ],

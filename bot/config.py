@@ -1,4 +1,13 @@
-SUBSCRIPTION_ONLY_NEW=True     # Only send the summaries processed today or not yet processed
+# Ollama Configuration
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5vl:32b"
 
-OLLAMA_BASE_URL="http://localhost:11434"   # Ollama base URL
-OLLAMA_MODEL="qwen2.5vl:32b"               # Ollama model to use
+# OpenAI Configuration
+OPENAI_BASE_URL = "http://192.168.1.105:1234/v1"  # Can be changed to any OpenAI-compatible endpoint
+OPENAI_MODEL = "openai/gpt-oss-120b"
+
+# LLM Provider Configuration
+LLM_PROVIDER = "OPENAI"  # Options: "OLLAMA" or "OPENAI"
+
+# Subscription Configuration
+SUBSCRIPTION_ONLY_NEW = True

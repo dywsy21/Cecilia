@@ -74,7 +74,25 @@ An example of '[CATEGORY].[TOPIC]' will be 'cs.ai'.
 
 #### Email Notification System
 
-**Configuration:** The system supports automated email notifications for research updates.
+**Configuration:** Configure your preferred LLM provider in `bot/config.py`:
+
+```python
+# Choose your LLM provider
+LLM_PROVIDER = "OPENAI"  # Options: "OLLAMA" or "OPENAI"
+
+# Ollama Configuration (for local models)
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "deepseek-r1:32b"
+
+# OpenAI Configuration (for OpenAI or compatible APIs)
+OPENAI_BASE_URL = "https://api.openai.com/v1"  # Can be changed to any OpenAI-compatible endpoint
+OPENAI_MODEL = "gpt-4o-mini"
+```
+
+Add your OpenAI API key in `bot/auths.py` if using OpenAI:
+```python
+OPENAI_API_KEY = "your-api-key-here"
+```
 
 **Setup:**
 1. **Configure Email Settings:** Fill in email credentials in `bot/auths.py`:
@@ -196,26 +214,42 @@ The pdf file can be downloaded from `<link title="pdf" href="http://arxiv.org/pd
 
 #### AI Usage Guides
 
-We use Ollama to run models locally. The Ollama service should be running as a systemd service:
+The system supports multiple LLM providers for paper summarization:
 
+**1. Ollama (Local):**
 ```sh
 sudo systemctl start ollama
 sudo systemctl enable ollama
 ```
 
-To generate a response using AI:
+**2. OpenAI-Compatible APIs:**
+Configure in `bot/config.py`:
+```python
+LLM_PROVIDER = "OPENAI"  # or "OLLAMA"
+OPENAI_BASE_URL = "https://api.openai.com/v1"  # or your custom endpoint
+OPENAI_MODEL = "gpt-4o-mini"
+```
 
+Add your API key in `bot/auths.py`:
+```python
+OPENAI_API_KEY = "your-api-key-here"
+```
+
+**Testing LLM Connection:**
 ```sh
+# For Ollama
 curl http://localhost:11434/api/generate -d '{
   "model": "deepseek-r1:32b",
   "prompt":"Why is the sky blue?",
   "stream": false
 }'
+
+# For OpenAI-compatible endpoints
+curl -X GET "https://api.openai.com/v1/models" \
+  -H "Authorization: Bearer your-api-key"
 ```
 
-We use the equivalent python code to interact with Ollama.
-
-We use deepseek-r1:32b to summarize the results, and will remove the `<think>.*</think>` thinking part.
+The system automatically uses the configured LLM provider and removes thinking tags (`<think>.*</think>`) for reasoning models.
 
 #### Summarizing & Pushing Workflow
 
