@@ -5,12 +5,18 @@ import json
 import logging
 import subprocess
 import xml.etree.ElementTree as ET
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import hashlib
 
-from bot.config import SUBSCRIPTION_ONLY_NEW
+from bot.config import (
+    SUBSCRIPTION_ONLY_NEW, 
+    SUMMARIZATION_SCHEDULE_HOUR, 
+    SUMMARIZATION_SCHEDULE_MINUTE,
+    NOTIFICATION_SCHEDULE_HOUR,
+    NOTIFICATION_SCHEDULE_MINUTE
+)
 from ..email_service.email_service import EmailService
 from ..llm_handler.llm_handler import LLMHandler
 
@@ -870,7 +876,7 @@ class EssaySummarizer:
         subscriptions[user_id].append({"category": category, "topic": topic})
         self._save_subscriptions(subscriptions)
 
-        return f"✅ Successfully subscribed to '{topic}' in category '{category}'. You'll receive daily summaries at 7:00 AM."
+        return f"✅ Successfully subscribed to '{topic}' in category '{category}'. You'll receive daily summaries at {NOTIFICATION_SCHEDULE_HOUR}:{NOTIFICATION_SCHEDULE_MINUTE:02d}."
 
     async def remove_subscription(self, user_id: str, category: str, topic: str) -> str:
         """Remove a topic subscription for a user"""
@@ -911,75 +917,61 @@ class EssaySummarizer:
         return f"""📚 **Your Research Subscriptions:**
 {topics_text}
 
-🕰️ Daily summaries are sent at 7:00 AM
+🕰️ Daily summaries are sent at {NOTIFICATION_SCHEDULE_HOUR}:{NOTIFICATION_SCHEDULE_MINUTE:02d}
 💡 Use `/subscribe add [category] [topic]` to add more subscriptions
 📝 Use `/subscribe remove [category] [topic]` to remove subscriptions"""
     
-    async def summarize_from_subscriptions(self):
-        """Process all subscriptions (called by scheduler) - only send new papers and emails"""
-        subscriptions = self._cleanup_invalid_subscriptions()
-        email_targets = self._load_email_targets()
+    async def daily_summarization(self):
+        """Daily summarization phase - process all required papers and store results"""
+        logger.info("Starting daily summarization phase...")
         
-        logger.info(f"Starting scheduled subscription processing for {len(subscriptions)} Discord users and {len(email_targets)} email targets")
-        
-        # Phase 1: Process Discord subscriptions
-        logger.info("Phase 1: Processing Discord subscriptions...")
-        for user_id, user_subscriptions in subscriptions.items():
-            for subscription in user_subscriptions:
-                try:
+        try:
+            # Get all subscriptions and email targets to determine what papers to process
+            subscriptions = self._cleanup_invalid_subscriptions()
+            email_targets = self._load_email_targets()
+            
+            # Collect all unique paper types needed
+            all_paper_types = set()
+            
+            # Add Discord subscription topics
+            for user_id, user_subscriptions in subscriptions.items():
+                for subscription in user_subscriptions:
                     category = subscription.get('category', 'all')
                     topic = subscription.get('topic', '')
-                    
-                    if not topic:
-                        logger.warning(f"Skipping invalid subscription for user {user_id}: {subscription}")
-                        continue
-                    
-                    logger.info(f"Processing Discord subscription: {category}/{topic} for user {user_id}")
-                    # Use is_scheduled=True for scheduled subscriptions
-                    result = await self.summarize_and_push(category, topic, user_id, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True)
-                    
-                    # Log the Discord result
-                    if result.get('no_new_papers'):
-                        logger.info(f"No new papers found for subscription {category}/{topic} for user {user_id}")
-                    elif result['success']:
-                        logger.info(f"Sent {result['papers_count']} papers to user {user_id} for {category}/{topic}")
-                    else:
-                        logger.error(f"Failed to process subscription {category}/{topic} for user {user_id}: {result.get('error')}")
-                    
-                    # Add delay between processing to avoid rate limits
-                    await asyncio.sleep(3)
-                except Exception as e:
-                    logger.error(f"Error processing Discord subscription {subscription} for user {user_id}: {e}")
-                    continue
-        
-        # Phase 2: Process Email subscriptions
-        logger.info("Phase 2: Processing Email subscriptions...")
-        if email_targets:
-            # Get all unique paper types from all email subscriptions
-            all_paper_types = set()
+                    if topic:
+                        paper_type = f"{category}.{topic}" if category != 'all' else topic
+                        all_paper_types.add(paper_type)
+            
+            # Add email subscription topics
             for email, paper_types in email_targets.items():
                 all_paper_types.update(paper_types)
             
-            logger.info(f"Found {len(all_paper_types)} unique paper types across all email subscriptions: {list(all_paper_types)}")
+            logger.info(f"Found {len(all_paper_types)} unique paper types to process: {list(all_paper_types)}")
             
-            # Process each unique paper type once and collect results
-            paper_type_results = {}
+            # Process each paper type and store results
+            daily_results = {}
+            
             for paper_type in all_paper_types:
                 try:
-                    # Parse paper type (e.g., 'cs.ai' -> category='cs', topic='ai')
+                    # Parse paper type
                     if '.' in paper_type:
                         category, topic = paper_type.split('.', 1)
                     else:
                         category = 'all'
                         topic = paper_type
                     
-                    logger.info(f"Processing paper type: {category}/{topic}")
+                    logger.info(f"Processing paper type for summarization: {category}/{topic}")
                     
-                    # Get papers for this topic (scheduled mode)
-                    result = await self.summarize_and_push(category, topic, user_id=None, only_new=SUBSCRIPTION_ONLY_NEW, is_scheduled=True)
+                    # Run summarization without sending to users
+                    result = await self.summarize_and_push(
+                        category, topic, 
+                        user_id=None,  # No user ID = no Discord sending
+                        only_new=SUBSCRIPTION_ONLY_NEW, 
+                        is_scheduled=True
+                    )
                     
-                    # Store result for this paper type
-                    paper_type_results[paper_type] = {
+                    # Store results for later notification
+                    daily_results[paper_type] = {
                         'category': category,
                         'topic': topic,
                         'papers': result.get('papers', []),
@@ -989,59 +981,151 @@ class EssaySummarizer:
                             'cached_papers': result.get('cached_papers', 0)
                         },
                         'success': result.get('success', False),
-                        'no_new_papers': result.get('no_new_papers', False)
+                        'no_new_papers': result.get('no_new_papers', False),
+                        'processed_at': datetime.now().isoformat()
                     }
                     
-                    logger.info(f"Paper type {paper_type}: {len(result.get('papers', []))} papers found")
+                    if result.get('success'):
+                        logger.info(f"Summarization completed for {paper_type}: {len(result.get('papers', []))} papers")
+                    else:
+                        logger.warning(f"Summarization failed for {paper_type}: {result.get('error', 'Unknown error')}")
                     
-                    # Add delay between paper type processing
-                    await asyncio.sleep(2)
+                    # Small delay between paper types
+                    await asyncio.sleep(1)
                     
                 except Exception as e:
-                    logger.error(f"Error processing paper type {paper_type}: {e}")
-                    # Handle case where category/topic aren't set yet
+                    logger.error(f"Error during summarization for paper type {paper_type}: {e}")
+                    # Handle case where category/topic parsing failed
                     if '.' in paper_type:
                         error_category, error_topic = paper_type.split('.', 1)
                     else:
                         error_category = 'all'
                         error_topic = paper_type
                     
-                    paper_type_results[paper_type] = {
+                    daily_results[paper_type] = {
                         'category': error_category,
                         'topic': error_topic,
                         'papers': [],
                         'stats': {'papers_count': 0, 'new_papers': 0, 'cached_papers': 0},
                         'success': False,
-                        'error': str(e)
+                        'error': str(e),
+                        'processed_at': datetime.now().isoformat()
                     }
                     continue
             
-            # Now send emails to each email address based on their subscriptions
+            # Save all results for later notification
+            await self._save_daily_results(daily_results)
+            
+            # Cleanup old results files
+            await self._cleanup_old_results()
+            
+            logger.info(f"Daily summarization phase completed. Processed {len(all_paper_types)} paper types.")
+            
+        except Exception as e:
+            logger.error(f"Error in daily summarization phase: {e}")
+            raise
+
+    async def daily_notifications(self):
+        """Daily notification phase - send Discord messages and emails based on stored results"""
+        logger.info("Starting daily notification phase...")
+        
+        try:
+            # Load today's summarization results
+            daily_results = await self._load_daily_results()
+            
+            if not daily_results:
+                logger.info("No daily results found - skipping notifications")
+                return
+            
+            # Get current subscriptions and email targets
+            subscriptions = self._cleanup_invalid_subscriptions()
+            email_targets = self._load_email_targets()
+            
+            # Phase 1: Send Discord notifications
+            logger.info("Phase 1: Sending Discord notifications...")
+            for user_id, user_subscriptions in subscriptions.items():
+                for subscription in user_subscriptions:
+                    try:
+                        category = subscription.get('category', 'all')
+                        topic = subscription.get('topic', '')
+                        
+                        if not topic:
+                            logger.warning(f"Skipping invalid subscription for user {user_id}: {subscription}")
+                            continue
+                        
+                        paper_type = f"{category}.{topic}" if category != 'all' else topic
+                        
+                        # Get results for this paper type
+                        if paper_type not in daily_results:
+                            logger.warning(f"No results found for paper type {paper_type} for user {user_id}")
+                            continue
+                        
+                        result_data = daily_results[paper_type]
+                        
+                        # Skip if no papers or processing failed
+                        if not result_data.get('success') or not result_data.get('papers'):
+                            if result_data.get('no_new_papers'):
+                                logger.info(f"No new papers for {paper_type} for user {user_id}")
+                            else:
+                                logger.warning(f"No papers or failed processing for {paper_type} for user {user_id}")
+                            continue
+                        
+                        # Send Discord notification using stored results
+                        logger.info(f"Sending Discord notification for {paper_type} to user {user_id} with {len(result_data['papers'])} papers")
+                        
+                        # Create and send embeds
+                        header_embed = self._create_summary_header_embed(
+                            category, topic, 
+                            len(result_data['papers']), 
+                            result_data['stats']['new_papers'], 
+                            result_data['stats']['cached_papers'], 
+                            only_new=True
+                        )
+                        
+                        paper_embeds = []
+                        for i, paper in enumerate(result_data['papers'], 1):
+                            paper_embed = self._create_paper_embed(paper, i, len(result_data['papers']), category, topic)
+                            paper_embeds.append(paper_embed)
+                        
+                        all_embeds = [header_embed] + paper_embeds
+                        await self._send_embeds_with_interval(user_id, all_embeds, interval=2.5)
+                        
+                        logger.info(f"Discord notification sent successfully for {paper_type} to user {user_id}")
+                        
+                        # Add delay between users
+                        await asyncio.sleep(3)
+                        
+                    except Exception as e:
+                        logger.error(f"Error sending Discord notification for {subscription} to user {user_id}: {e}")
+                        continue
+            
+            # Phase 2: Send Email notifications
+            logger.info("Phase 2: Sending Email notifications...")
             for email, subscribed_paper_types in email_targets.items():
                 if not subscribed_paper_types:
                     logger.info(f"Skipping email {email} - no paper types configured")
                     continue
                 
-                logger.info(f"Processing email subscriptions for {email}: {subscribed_paper_types}")
+                logger.info(f"Processing email notifications for {email}: {subscribed_paper_types}")
                 
                 for paper_type in subscribed_paper_types:
                     try:
-                        # Get the processed result for this paper type
-                        if paper_type not in paper_type_results:
-                            logger.warning(f"Paper type {paper_type} not found in results for {email}")
+                        # Get results for this paper type
+                        if paper_type not in daily_results:
+                            logger.warning(f"No results found for paper type {paper_type} for email {email}")
                             continue
                         
-                        result_data = paper_type_results[paper_type]
+                        result_data = daily_results[paper_type]
                         
-                        # Skip if no papers found or processing failed
-                        if not result_data['success'] or not result_data['papers']:
+                        # Skip if no papers or processing failed
+                        if not result_data.get('success') or not result_data.get('papers'):
                             if result_data.get('no_new_papers'):
                                 logger.info(f"No new papers for {paper_type} for email {email}")
                             else:
                                 logger.warning(f"No papers or failed processing for {paper_type} for email {email}")
                             continue
                         
-                        # Send email for this specific paper type
+                        # Send email notification
                         logger.info(f"Sending email for {paper_type} to {email} with {len(result_data['papers'])} papers")
                         
                         email_result = await self.email_service.send_paper_summary_email(
@@ -1053,11 +1137,11 @@ class EssaySummarizer:
                         )
                         
                         if email_result['success']:
-                            logger.info(f"Email sent successfully for {paper_type} to {email}: {len(result_data['papers'])} papers")
+                            logger.info(f"Email sent successfully for {paper_type} to {email}")
                         else:
                             logger.error(f"Failed to send email for {paper_type} to {email}: {email_result.get('error')}")
                         
-                        # Add delay between emails to avoid overwhelming email servers
+                        # Add delay between emails
                         await asyncio.sleep(5)
                         
                     except Exception as e:
@@ -1066,14 +1150,16 @@ class EssaySummarizer:
                 
                 # Add delay between different email addresses
                 await asyncio.sleep(10)
-        else:
-            logger.info("No email targets configured, skipping email phase")
-        
-        logger.info("Scheduled subscription processing completed")
+            
+            logger.info("Daily notification phase completed")
+            
+        except Exception as e:
+            logger.error(f"Error in daily notification phase: {e}")
+            raise
 
-    async def start_scheduler(self):
-        """Start the daily scheduler for subscriptions"""
-        logger.info("Starting subscription scheduler")
+    async def start_summarization_scheduler(self):
+        """Start the daily summarization scheduler"""
+        logger.info("Starting summarization scheduler")
         
         max_consecutive_errors = 5
         consecutive_errors = 0
@@ -1081,40 +1167,176 @@ class EssaySummarizer:
         while True:
             try:
                 now = datetime.now()
-                target_time = now.replace(hour=7, minute=0, second=0, microsecond=0)
+                target_time = now.replace(hour=SUMMARIZATION_SCHEDULE_HOUR, minute=SUMMARIZATION_SCHEDULE_MINUTE, second=0, microsecond=0)
                 
-                # If it's past 7 AM today, schedule for tomorrow
-                if now.time() > time(7, 0):
-                    target_time = target_time.replace(day=target_time.day + 1)
+                # If it's past scheduled time today, schedule for tomorrow
+                if now.time() > time(SUMMARIZATION_SCHEDULE_HOUR, SUMMARIZATION_SCHEDULE_MINUTE):
+                    target_time = target_time + timedelta(days=1)
                 
                 # Calculate sleep time
                 sleep_seconds = (target_time - now).total_seconds()
-                logger.info(f"Next subscription run scheduled for: {target_time}")
+                logger.info(f"Next summarization run scheduled for: {target_time}")
                 
                 await asyncio.sleep(sleep_seconds)
                 
-                # Run the subscription processing
-                logger.info("Starting daily subscription processing")
-                await self.summarize_from_subscriptions()
-                logger.info("Daily subscription processing completed")
+                # Run the summarization phase
+                logger.info("Starting daily summarization phase")
+                await self.daily_summarization()
+                logger.info("Daily summarization phase completed")
                 
                 # Reset error counter on successful run
                 consecutive_errors = 0
                 
             except asyncio.CancelledError:
-                logger.info("Subscription scheduler cancelled")
+                logger.info("Summarization scheduler cancelled")
                 break
             except Exception as e:
                 consecutive_errors += 1
-                logger.error(f"Error in scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+                logger.error(f"Error in summarization scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
                 
                 if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Scheduler failed {max_consecutive_errors} consecutive times, giving up")
+                    logger.error(f"Summarization scheduler failed {max_consecutive_errors} consecutive times, giving up")
                     from ..apps import CeciliaServiceError
-                    raise CeciliaServiceError(f"Subscription scheduler failed repeatedly: {e}")
+                    raise CeciliaServiceError(f"Summarization scheduler failed repeatedly: {e}")
                 
                 # Sleep for an hour before retrying
                 await asyncio.sleep(3600)
+
+    async def start_notification_scheduler(self):
+        """Start the daily notification scheduler"""
+        logger.info("Starting notification scheduler")
+        
+        max_consecutive_errors = 5
+        consecutive_errors = 0
+        
+        while True:
+            try:
+                now = datetime.now()
+                target_time = now.replace(hour=NOTIFICATION_SCHEDULE_HOUR, minute=NOTIFICATION_SCHEDULE_MINUTE, second=0, microsecond=0)
+                
+                # If it's past scheduled time today, schedule for tomorrow
+                if now.time() > time(NOTIFICATION_SCHEDULE_HOUR, NOTIFICATION_SCHEDULE_MINUTE):
+                    target_time = target_time + timedelta(days=1)
+                
+                # Calculate sleep time
+                sleep_seconds = (target_time - now).total_seconds()
+                logger.info(f"Next notification run scheduled for: {target_time}")
+                
+                await asyncio.sleep(sleep_seconds)
+                
+                # Run the notification phase
+                logger.info("Starting daily notification phase")
+                await self.daily_notifications()
+                logger.info("Daily notification phase completed")
+                
+                # Reset error counter on successful run
+                consecutive_errors = 0
+                
+            except asyncio.CancelledError:
+                logger.info("Notification scheduler cancelled")
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Error in notification scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Notification scheduler failed {max_consecutive_errors} consecutive times, giving up")
+                    from ..apps import CeciliaServiceError
+                    raise CeciliaServiceError(f"Notification scheduler failed repeatedly: {e}")
+                
+                # Sleep for an hour before retrying
+                await asyncio.sleep(3600)
+
+    async def start_scheduler(self):
+        """Start both summarization and notification schedulers"""
+        logger.info("Starting both summarization and notification schedulers")
+        
+        # Create tasks for both schedulers
+        summarization_task = asyncio.create_task(self.start_summarization_scheduler())
+        notification_task = asyncio.create_task(self.start_notification_scheduler())
+        
+        try:
+            # Run both schedulers concurrently
+            await asyncio.gather(summarization_task, notification_task)
+        except asyncio.CancelledError:
+            logger.info("Both schedulers cancelled")
+            summarization_task.cancel()
+            notification_task.cancel()
+        except Exception as e:
+            logger.error(f"Error in main scheduler: {e}")
+            summarization_task.cancel()
+            notification_task.cancel()
+            raise
+
+    def _get_daily_results_file(self) -> Path:
+        """Get path for today's daily results file"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        return self.base_dir / f"daily_results_{today}.json"
+    
+    async def _save_daily_results(self, results: Dict):
+        """Save daily summarization results for later notification"""
+        try:
+            results_file = self._get_daily_results_file()
+            
+            # Load existing results if any
+            existing_results = {}
+            if results_file.exists():
+                async with aiofiles.open(results_file, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                    existing_results = json.loads(content)
+            
+            # Merge new results
+            existing_results.update(results)
+            
+            # Save updated results
+            async with aiofiles.open(results_file, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(existing_results, indent=2, ensure_ascii=False))
+            
+            logger.info(f"Saved daily results to {results_file}")
+            
+        except Exception as e:
+            logger.error(f"Error saving daily results: {e}")
+    
+    async def _load_daily_results(self) -> Dict:
+        """Load today's daily results for notification"""
+        try:
+            results_file = self._get_daily_results_file()
+            
+            if not results_file.exists():
+                logger.info("No daily results file found for today")
+                return {}
+            
+            async with aiofiles.open(results_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                results = json.loads(content)
+            
+            logger.info(f"Loaded daily results from {results_file}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error loading daily results: {e}")
+            return {}
+    
+    async def _cleanup_old_results(self):
+        """Clean up results files older than 8 days"""
+        try:
+            cutoff_date = datetime.now() - timedelta(days=8)
+            
+            for file_path in self.base_dir.glob("daily_results_*.json"):
+                try:
+                    # Extract date from filename
+                    date_str = file_path.stem.replace("daily_results_", "")
+                    file_date = datetime.strptime(date_str, '%Y-%m-%d')
+                    
+                    if file_date < cutoff_date:
+                        file_path.unlink()
+                        logger.info(f"Cleaned up old results file: {file_path}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing results file {file_path}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error during results cleanup: {e}")
 
     async def _process_paper_pipeline(self, paper: Dict, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """Process a single paper through the complete pipeline with concurrency control"""
