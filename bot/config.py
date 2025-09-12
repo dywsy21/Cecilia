@@ -3,7 +3,7 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5vl:32b"
 
 # OpenAI Configuration
-OPENAI_BASE_URL = "http://192.168.1.105:1234/v1"  # Can be changed to any OpenAI-compatible endpoint
+OPENAI_BASE_URL = "http://192.168.1.106:1234/v1"  # Can be changed to any OpenAI-compatible endpoint
 OPENAI_MODEL = "openai/gpt-oss-120b"
 
 # LLM Provider Configuration
