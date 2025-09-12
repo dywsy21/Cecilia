@@ -1,14 +1,8 @@
 import asyncio
-import aiohttp
-import aiofiles
-import json
 import logging
-import subprocess
-import xml.etree.ElementTree as ET
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-import hashlib
 
 from bot.config import (
     SUBSCRIPTION_ONLY_NEW, 
@@ -19,6 +13,13 @@ from bot.config import (
 )
 from ..email_service.email_service import EmailService
 from ..llm_handler.llm_handler import LLMHandler
+
+# Import the new modules
+from . import arxiv_client
+from . import pdf_processor
+from . import data_manager
+from . import notification_sender
+from . import scheduler_manager
 
 logger = logging.getLogger(__name__)
 
@@ -67,338 +68,39 @@ class EssaySummarizer:
     
     async def search_arxiv(self, category: str, topic: str, max_results: int = 10) -> List[Dict]:
         """Search for papers on a specific category and topic with retry logic"""
-        max_retries = 8
-        retry_delay = 2  # Start with 2 seconds delay
-        
-        for attempt in range(max_retries):
-            try:
-                # Build search query based on category
-                search_query = f'{category if category else 'all'}.{topic}'
-                
-                params = {
-                    'search_query': search_query,
-                    'sortBy': 'lastUpdatedDate',
-                    'sortOrder': 'descending',
-                    'start': 0,
-                    'max_results': max_results
-                }
-                
-                logger.info(f"Searching ArXiv with query: {search_query} (attempt {attempt + 1}/{max_retries})")
-                
-                # Use timeout for the request
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(self.arxiv_base_url, params=params) as response:
-                        if response.status == 200:
-                            xml_content = await response.text()
-                            papers = await self._parse_arxiv_response(xml_content)
-                            logger.info(f"Successfully retrieved {len(papers)} papers from ArXiv (attempt {attempt + 1})")
-                            return papers
-                        else:
-                            logger.warning(f"ArXiv API returned status {response.status} on attempt {attempt + 1}")
-                            if attempt == max_retries - 1:
-                                logger.error(f"Failed to search ArXiv after {max_retries} attempts: HTTP {response.status}")
-                                return []
-                            
-            except asyncio.TimeoutError:
-                logger.warning(f"ArXiv search timeout on attempt {attempt + 1}/{max_retries}")
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: timeout")
-                    return []
-                    
-            except aiohttp.ClientError as e:
-                logger.warning(f"ArXiv client error on attempt {attempt + 1}/{max_retries}: {e}")
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: {e}")
-                    return []
-                    
-            except Exception as e:
-                logger.warning(f"Unexpected error searching ArXiv on attempt {attempt + 1}/{max_retries}: {e}")
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: {e}")
-                    return []
-            
-            # Wait before retry (exponential backoff)
-            if attempt < max_retries - 1:
-                wait_time = retry_delay * (2 ** attempt)  # 2s, 4s, 8s, 16s
-                logger.info(f"Waiting {wait_time}s before retry...")
-                await asyncio.sleep(wait_time)
-        
-        return []
-    
-    async def _parse_arxiv_response(self, xml_content: str) -> List[Dict]:
-        """Parse XML response from ArXiv API"""
-        try:
-            root = ET.fromstring(xml_content)
-            papers = []
-            
-            # Define namespaces
-            ns = {
-                'atom': 'http://www.w3.org/2005/Atom',
-                'arxiv': 'http://arxiv.org/schemas/atom'
-            }
-            
-            for entry in root.findall('atom:entry', ns):
-                paper = {}
-                
-                # Extract basic info
-                paper['id'] = entry.find('atom:id', ns).text.split('/')[-1]
-                paper['title'] = entry.find('atom:title', ns).text.strip()
-                paper['summary'] = entry.find('atom:summary', ns).text.strip()
-                paper['updated'] = entry.find('atom:updated', ns).text
-                paper['published'] = entry.find('atom:published', ns).text
-                
-                # Extract authors
-                authors = []
-                for author in entry.findall('atom:author', ns):
-                    name = author.find('atom:name', ns).text
-                    authors.append(name)
-                paper['authors'] = authors
-                
-                # Extract PDF link
-                for link in entry.findall('atom:link', ns):
-                    if link.get('title') == 'pdf':
-                        paper['pdf_url'] = link.get('href')
-                        break
-                
-                # Extract categories
-                categories = []
-                for category in entry.findall('atom:category', ns):
-                    categories.append(category.get('term'))
-                paper['categories'] = categories
-                
-                papers.append(paper)
-            
-            return papers
-            
-        except Exception as e:
-            logger.error(f"Error parsing ArXiv XML: {e}")
-            return []
+        return await arxiv_client.search_arxiv(category, topic, max_results)
     
     def _load_email_targets(self) -> Dict[str, List[str]]:
         """Load email targets from disk with new format: {email: [categories]}"""
-        try:
-            with open(self.email_targets_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # Handle migration from old format (list of strings) to new format (dict)
-                if isinstance(data, list):
-                    logger.info("Migrating email_targets.json from old format to new format")
-                    # Convert old format to new format with empty subscriptions
-                    new_data = {email: [] for email in data}
-                    self._save_email_targets(new_data)
-                    return new_data
-                
-                return data
-        except Exception as e:
-            logger.error(f"Error loading email targets: {e}")
-            return {}
+        return data_manager.load_email_targets(self.email_targets_file)
 
     def _save_email_targets(self, email_targets: Dict[str, List[str]]):
         """Save email targets to disk"""
-        try:
-            with open(self.email_targets_file, 'w', encoding='utf-8') as f:
-                json.dump(email_targets, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Error saving email targets: {e}")
+        data_manager.save_email_targets(email_targets, self.email_targets_file)
 
     def _load_subscriptions(self) -> Dict[str, List[Dict]]:
         """Load subscriptions from disk"""
-        try:
-            with open(self.subscriptions_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # Handle migration from old format (list of strings) to new format (list of dicts)
-                migrated = False
-                for user_id, subscriptions in data.items():
-                    if subscriptions and isinstance(subscriptions[0], str):
-                        # Convert old format to new format
-                        data[user_id] = [{"category": "all", "topic": topic} for topic in subscriptions]
-                        migrated = True
-                        logger.info(f"Migrated subscriptions for user {user_id} from old format")
-                
-                if migrated:
-                    self._save_subscriptions(data)
-                    logger.info("Subscription migration completed")
-                
-                return data
-        except Exception as e:
-            logger.error(f"Error loading subscriptions: {e}")
-            return {}
+        return data_manager.load_subscriptions(self.subscriptions_file)
 
     def _save_subscriptions(self, subscriptions: Dict[str, List[Dict]]):
         """Save subscriptions to disk"""
-        try:
-            with open(self.subscriptions_file, 'w', encoding='utf-8') as f:
-                json.dump(subscriptions, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Error saving subscriptions: {e}")
+        data_manager.save_subscriptions(subscriptions, self.subscriptions_file)
 
     def _cleanup_invalid_subscriptions(self):
         """Clean up invalid subscription records"""
-        try:
-            subscriptions = self._load_subscriptions()
-            cleaned = False
-            
-            for user_id, user_subscriptions in list(subscriptions.items()):
-                # Remove invalid subscription entries
-                valid_subscriptions = []
-                for sub in user_subscriptions:
-                    if isinstance(sub, dict) and 'category' in sub and 'topic' in sub:
-                        valid_subscriptions.append(sub)
-                    else:
-                        logger.info(f"Removing invalid subscription entry for user {user_id}: {sub}")
-                        cleaned = True
-                
-                subscriptions[user_id] = valid_subscriptions
-                
-                # Remove users with no valid subscriptions
-                if not valid_subscriptions:
-                    del subscriptions[user_id]
-                    logger.info(f"Removed user {user_id} with no valid subscriptions")
-                    cleaned = True
-            
-            if cleaned:
-                self._save_subscriptions(subscriptions)
-                logger.info("Subscription cleanup completed")
-            
-            return subscriptions
-        except Exception as e:
-            logger.error(f"Error during subscription cleanup: {e}")
-            return {}
+        return data_manager.cleanup_invalid_subscriptions(self.subscriptions_file)
     
     def _is_valid_pdf(self, pdf_path: Path) -> bool:
         """Check if a PDF file is valid by examining its header and basic structure"""
-        try:
-            if not pdf_path.exists() or pdf_path.stat().st_size < 100:  # Too small to be a valid PDF
-                return False
-            
-            with open(pdf_path, 'rb') as f:
-                # Check PDF header
-                header = f.read(10)
-                if not header.startswith(b'%PDF-'):
-                    return False
-                
-                # Check if file has EOF marker (basic structure validation)
-                f.seek(-100, 2)  # Go to last 100 bytes
-                tail = f.read()
-                if b'%%EOF' not in tail:
-                    return False
-                
-            return True
-        except Exception as e:
-            logger.warning(f"Error validating PDF {pdf_path}: {e}")
-            return False
+        return pdf_processor.is_valid_pdf(pdf_path)
     
     async def download_pdf(self, pdf_url: str, paper_id: str) -> Optional[Path]:
         """Download PDF file from ArXiv with timeout and retry logic"""
-        pdf_path = self.processed_papers_dir / f"{paper_id}.pdf"
-        try:
-            # Check if already downloaded and valid
-            if pdf_path.exists() and self._is_valid_pdf(pdf_path):
-                logger.info(f"Valid PDF already exists: {pdf_path}")
-                return pdf_path
-            
-            # Remove existing invalid PDF if present
-            if pdf_path.exists():
-                logger.info(f"Removing invalid/incomplete PDF: {pdf_path}")
-                pdf_path.unlink()
-            
-            max_retries = 5
-            timeout_seconds = 20
-            
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Downloading PDF attempt {attempt + 1}/{max_retries}: {paper_id}")
-                    
-                    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(pdf_url) as response:
-                            if response.status == 200:
-                                async with aiofiles.open(pdf_path, 'wb') as f:
-                                    async for chunk in response.content.iter_chunked(8192):
-                                        await f.write(chunk)
-                                
-                                # Validate the downloaded PDF
-                                if self._is_valid_pdf(pdf_path):
-                                    logger.info(f"Successfully downloaded and validated PDF: {pdf_path} (attempt {attempt + 1})")
-                                    return pdf_path
-                                else:
-                                    logger.warning(f"Downloaded PDF is invalid on attempt {attempt + 1} for {paper_id}")
-                                    # Remove invalid PDF before retry
-                                    if pdf_path.exists():
-                                        pdf_path.unlink()
-                                    if attempt == max_retries - 1:
-                                        logger.error(f"Failed to download valid PDF after {max_retries} attempts")
-                                        return None
-                            else:
-                                logger.warning(f"HTTP {response.status} on attempt {attempt + 1} for {paper_id}")
-                                if attempt == max_retries - 1:
-                                    logger.error(f"Failed to download PDF after {max_retries} attempts: HTTP {response.status}")
-                                    return None
-                                
-                except asyncio.TimeoutError:
-                    logger.warning(f"Download timeout ({timeout_seconds}s) on attempt {attempt + 1} for {paper_id}")
-                    # Remove partial download if exists
-                    if pdf_path.exists():
-                        pdf_path.unlink()
-                    if attempt == max_retries - 1:
-                        logger.error(f"Failed to download PDF after {max_retries} attempts: timeout")
-                        return None
-                    
-                except aiohttp.ClientError as e:
-                    logger.warning(f"Client error on attempt {attempt + 1} for {paper_id}: {e}")
-                    # Remove partial download if exists
-                    if pdf_path.exists():
-                        pdf_path.unlink()
-                    if attempt == max_retries - 1:
-                        logger.error(f"Failed to download PDF after {max_retries} attempts: {e}")
-                        return None
-                
-                # Wait before retry (exponential backoff)
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** (attempt)  # 1s, 2s, 4s
-                    logger.info(f"Waiting {wait_time}s before retry...")
-                    await asyncio.sleep(wait_time)
-            
-            return None
-                        
-        except Exception as e:
-            logger.error(f"Unexpected error downloading PDF for {paper_id}: {e}")
-            # Clean up any partial download
-            if 'pdf_path' in locals() and pdf_path.exists():
-                try:
-                    pdf_path.unlink()
-                except Exception:
-                    pass
-            return None
+        return await pdf_processor.download_pdf(pdf_url, paper_id, self.processed_papers_dir)
     
     async def pdf_to_markdown(self, pdf_path: Path) -> Optional[str]:
         """Convert PDF to markdown using markitdown"""
-        try:
-            # Use markitdown CLI tool
-            result = subprocess.run(
-                ['markitdown', str(pdf_path)],
-                capture_output=True,
-                text=True,
-                timeout=120  # 2 minute timeout
-            )
-            
-            if result.returncode == 0:
-                return result.stdout
-            else:
-                logger.error(f"markitdown failed: {result.stderr}")
-                return None
-                
-        except subprocess.TimeoutExpired:
-            logger.error("PDF conversion timeout")
-            return None
-        except FileNotFoundError:
-            logger.error("markitdown not found. Please install markitdown: pip install markitdown")
-            return None
-        except Exception as e:
-            logger.error(f"Error converting PDF to markdown: {e}")
-            return None
+        return await pdf_processor.pdf_to_markdown(pdf_path)
     
     async def summarize_with_llm(self, paper_content: str, paper_title: str) -> Optional[str]:
         """Summarize paper content using the configured LLM provider"""
@@ -418,214 +120,47 @@ class EssaySummarizer:
     
     def _get_paper_hash(self, paper_id: str) -> str:
         """Get hash for paper to check if already processed"""
-        return hashlib.md5(paper_id.encode()).hexdigest()
+        return data_manager.get_paper_hash(paper_id)
     
     def _is_paper_processed(self, paper_id: str) -> bool:
         """Check if paper has been processed before"""
-        paper_hash = self._get_paper_hash(paper_id)
-        summary_file = self.summaries_dir / f"{paper_hash}.json"
-        return summary_file.exists()
+        return data_manager.is_paper_processed(paper_id, self.summaries_dir)
     
     def _is_paper_processed_today(self, paper_id: str) -> bool:
         """Check if paper was processed today"""
-        paper_hash = self._get_paper_hash(paper_id)
-        summary_file = self.summaries_dir / f"{paper_hash}.json"
-        
-        if not summary_file.exists():
-            return False
-        
-        try:
-            # Check file modification time
-            file_mod_time = datetime.fromtimestamp(summary_file.stat().st_mtime)
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            return file_mod_time >= today_start
-        except Exception as e:
-            logger.error(f"Error checking file modification time for {paper_id}: {e}")
-            return False
+        return data_manager.is_paper_processed_today(paper_id, self.summaries_dir)
     
     def _was_paper_processed_before_today(self, paper_id: str) -> bool:
         """Check if paper was processed before today (not including today)"""
-        paper_hash = self._get_paper_hash(paper_id)
-        summary_file = self.summaries_dir / f"{paper_hash}.json"
-        
-        if not summary_file.exists():
-            return False
-        
-        try:
-            # Check file modification time
-            file_mod_time = datetime.fromtimestamp(summary_file.stat().st_mtime)
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            return file_mod_time < today_start
-        except Exception as e:
-            logger.error(f"Error checking file modification time for {paper_id}: {e}")
-            return False
+        return data_manager.was_paper_processed_before_today(paper_id, self.summaries_dir)
     
     async def _save_paper_summary(self, paper: Dict, summary: str):
         """Save paper summary to disk"""
-        paper_hash = self._get_paper_hash(paper['id'])
-        summary_file = self.summaries_dir / f"{paper_hash}.json"
-        
-        summary_data = {
-            'paper_id': paper['id'],
-            'title': paper['title'],
-            'authors': paper['authors'],
-            'pdf_url': paper.get('pdf_url', ''),
-            'summary': summary,
-            'processed_at': datetime.now().isoformat(),
-            'categories': paper.get('categories', [])
-        }
-        
-        async with aiofiles.open(summary_file, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(summary_data, indent=2, ensure_ascii=False))
+        await data_manager.save_paper_summary(paper, summary, self.summaries_dir)
     
     async def _load_existing_summary(self, paper_id: str) -> Optional[Dict]:
         """Load existing summary for a paper"""
-        try:
-            paper_hash = self._get_paper_hash(paper_id)
-            summary_file = self.summaries_dir / f"{paper_hash}.json"
-            
-            if summary_file.exists():
-                async with aiofiles.open(summary_file, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    return json.loads(content)
-            return None
-        except Exception as e:
-            logger.error(f"Error loading existing summary for {paper_id}: {e}")
-            return None
+        return await data_manager.load_existing_summary(paper_id, self.summaries_dir)
 
     async def _send_message_via_api(self, user_id: str, message_data: Dict) -> Dict:
         """Send message via HTTP API to message pusher"""
-        try:
-            url = "http://localhost:8011/push"
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "user_id": str(user_id),
-                # "channel_id": "1190649951693316169",
-                "message": message_data
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        logger.info(f"Message sent successfully via API: {result}")
-                        return {"success": True, "result": result}
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Message pusher API error {response.status}: {error_text}")
-                        return {"success": False, "error": f"API error {response.status}: {error_text}"}
-                        
-        except Exception as e:
-            logger.error(f"Error calling message pusher API: {e}")
-            return {"success": False, "error": str(e)}
+        return await notification_sender.send_message_via_api(user_id, message_data)
 
     def _truncate_text(self, text: str, max_length: int) -> str:
         """Truncate text to maximum length while preserving word boundaries"""
-        if len(text) <= max_length:
-            return text
-        
-        # Find the last space before the limit
-        truncated = text[:max_length-3]
-        last_space = truncated.rfind(' ')
-        
-        if last_space > 0:
-            return truncated[:last_space] + "..."
-        else:
-            return truncated + "..."
+        return notification_sender.truncate_text(text, max_length)
 
     def _create_paper_embed(self, paper: Dict, index: int, total_count: int, category: str, topic: str) -> Dict:
         """Create individual embed for a single paper with full utilization of embed limits"""
-        
-        # Prepare authors string
-        authors_str = ", ".join(paper['authors'])
-        if len(authors_str) > 200:  # Limit for field value
-            authors_str = self._truncate_text(authors_str, 200)
-        
-        # Prepare categories string
-        categories_str = ", ".join(paper['categories'])
-        if len(categories_str) > 200:
-            categories_str = self._truncate_text(categories_str, 200)
-        
-        # Truncate title for embed title (256 char limit)
-        title = self._truncate_text(paper['title'], 250)
-        
-        # Use full 4096 character limit for description with the AI summary
-        description = f"**论文总结：**\n\n{paper['summary']}"
-        description = self._truncate_text(description, 4090)  # Leave some buffer
-        
-        # Create rich embed with visual appeal
-        embed = {
-            "title": f"📄 {title}",
-            "description": description,
-            "color": self._get_paper_color(index),
-            "fields": [
-                {
-                    "name": "👥 作者",
-                    "value": authors_str,
-                    "inline": False
-                },
-                {
-                    "name": "🏷️ 分类",
-                    "value": categories_str or "未分类",
-                    "inline": True
-                },
-                {
-                    "name": "📊 进度",
-                    "value": f"{index}/{total_count}",
-                    "inline": True
-                },
-                {
-                    "name": "🔗 链接",
-                    "value": f"[📖 阅读原文]({paper['pdf_url']})",
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": f"类别: {category} • 主题: {topic} • Cecilia 研究助手 • {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            },
-            # "thumbnail": {
-            #     "url": "https://arxiv.org/static/browse/0.3.4/images/arxiv-logo-fb.png"
-            # }
-        }
-        
-        return embed
+        return notification_sender.create_paper_embed(paper, index, total_count, category, topic)
 
     def _get_paper_color(self, index: int) -> str:
         """Get color for paper embed based on index"""
-        colors = [
-            "#1f8b4c",  # Green
-            "#3498db",  # Blue  
-            "#9b59b6",  # Purple
-            "#e91e63",  # Pink
-            "#f39c12",  # Orange
-            "#e74c3c",  # Red
-            "#1abc9c",  # Teal
-            "#34495e",  # Dark gray
-            "#16a085",  # Dark teal
-            "#8e44ad"   # Dark purple
-        ]
-        return colors[index % len(colors)]
+        return notification_sender.get_paper_color(index)
 
     async def _send_embeds_with_interval(self, user_id: str, embeds: List[Dict], interval: float = 2.0):
         """Send multiple embeds with time intervals to avoid rate limits"""
-        
-        for i, embed in enumerate(embeds):
-            try:
-                message_data = {"embed": embed}
-                api_result = await self._send_message_via_api(user_id, message_data)
-                
-                if api_result["success"]:
-                    logger.info(f"Sent embed {i+1}/{len(embeds)} successfully")
-                else:
-                    logger.error(f"Failed to send embed {i+1}/{len(embeds)}: {api_result.get('error', 'Unknown error')}")
-                
-                # Add interval between messages to avoid rate limits (except for last message)
-                if i < len(embeds) - 1:
-                    await asyncio.sleep(interval)
-                    
-            except Exception as e:
-                logger.error(f"Error sending embed {i+1}/{len(embeds)}: {e}")
-                continue
+        await notification_sender.send_embeds_with_interval(user_id, embeds, interval)
 
     async def summarize_and_push(self, category: str, topic: str, user_id: Optional[str] = None, only_new: bool = False, is_scheduled: bool = False) -> Dict:
         """Main workflow for summarizing papers and pushing results with parallel processing"""
@@ -790,75 +325,10 @@ class EssaySummarizer:
 
     def _create_summary_header_embed(self, category: str, topic: str, total_papers: int, new_count: int, cached_count: int, only_new: bool = False) -> Dict:
         """Create header embed with summary statistics"""
-        
-        # Create description with processing stats
-        if only_new:
-            # For scheduled subscriptions, emphasize new papers only
-            if new_count > 0:
-                status_text = f"🆕 新发现论文: {new_count} 篇"
-                description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-📅 **定时推送模式:** 仅显示新论文
-📈 **处理状态:** 
-{status_text}
-
-⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-📚 为您展示最新发现的论文总结..."""
-            else:
-                description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-📅 **定时推送模式:** 仅显示新论文
-📈 **处理状态:** 
-📊 暂无新论文发现
-
-⏰ **检查时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-💡 所有相关论文均已在之前处理过，请等待新论文发布。"""
-        else:
-            # For instant requests, show all papers
-            if new_count > 0 and cached_count > 0:
-                status_text = f"🆕 新处理: {new_count} 篇\n💾 缓存获取: {cached_count} 篇"
-            elif new_count > 0:
-                status_text = f"🆕 全部新处理: {new_count} 篇"
-            elif cached_count > 0:
-                status_text = f"💾 全部来自缓存: {cached_count} 篇"
-            else:
-                status_text = f"📊 共找到: {total_papers} 篇"
-
-            description = f"""🔍 **搜索类别:** {category}
-🎯 **搜索主题:** {topic}
-⚡ **即时查询模式:** 显示所有相关论文
-📈 **处理状态:** 
-{status_text}
-
-⏰ **处理时间:** {datetime.now().strftime('%Y年%m月%d日 %H:%M')}
-
-📚 即将为您展示每篇论文的详细总结..."""
-
-        embed = {
-            "title": "🎯 ArXiv 论文总结报告",
-            "description": description,
-            "color": "#2ecc71" if total_papers > 0 else "#95a5a6",
-            "fields": [
-                {
-                    "name": "📊 统计信息",
-                    "value": f"📄 总论文数: **{total_papers}**\n🔄 处理状态: **完成**\n⚡ 响应时间: **实时**",
-                    "inline": True
-                },
-                {
-                    "name": "🛠️ 技术信息", 
-                    "value": f"🤖 AI模型: **{self.llm_handler.model}**\n📡 数据源: **ArXiv API**\n🔍 排序: **最新更新**",
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "Cecilia 研究助手 • 基于最新 ArXiv 数据"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        return embed
+        return notification_sender.create_summary_header_embed(
+            category, topic, total_papers, new_count, cached_count, 
+            self.llm_handler.model, only_new
+        )
 
     async def add_subscription(self, user_id: str, category: str, topic: str) -> str:
         """Add a topic subscription for a user"""
@@ -1159,184 +629,46 @@ class EssaySummarizer:
 
     async def start_summarization_scheduler(self):
         """Start the daily summarization scheduler"""
-        logger.info("Starting summarization scheduler")
-        
-        max_consecutive_errors = 5
-        consecutive_errors = 0
-        
-        while True:
-            try:
-                now = datetime.now()
-                target_time = now.replace(hour=SUMMARIZATION_SCHEDULE_HOUR, minute=SUMMARIZATION_SCHEDULE_MINUTE, second=0, microsecond=0)
-                
-                # If it's past scheduled time today, schedule for tomorrow
-                if now.time() > time(SUMMARIZATION_SCHEDULE_HOUR, SUMMARIZATION_SCHEDULE_MINUTE):
-                    target_time = target_time + timedelta(days=1)
-                
-                # Calculate sleep time
-                sleep_seconds = (target_time - now).total_seconds()
-                logger.info(f"Next summarization run scheduled for: {target_time}")
-                
-                await asyncio.sleep(sleep_seconds)
-                
-                # Run the summarization phase
-                logger.info("Starting daily summarization phase")
-                await self.daily_summarization()
-                logger.info("Daily summarization phase completed")
-                
-                # Reset error counter on successful run
-                consecutive_errors = 0
-                
-            except asyncio.CancelledError:
-                logger.info("Summarization scheduler cancelled")
-                break
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Error in summarization scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Summarization scheduler failed {max_consecutive_errors} consecutive times, giving up")
-                    from ..apps import CeciliaServiceError
-                    raise CeciliaServiceError(f"Summarization scheduler failed repeatedly: {e}")
-                
-                # Sleep for an hour before retrying
-                await asyncio.sleep(3600)
+        await scheduler_manager.run_summarization_scheduler(
+            SUMMARIZATION_SCHEDULE_HOUR, 
+            SUMMARIZATION_SCHEDULE_MINUTE, 
+            self.daily_summarization
+        )
 
     async def start_notification_scheduler(self):
         """Start the daily notification scheduler"""
-        logger.info("Starting notification scheduler")
-        
-        max_consecutive_errors = 5
-        consecutive_errors = 0
-        
-        while True:
-            try:
-                now = datetime.now()
-                target_time = now.replace(hour=NOTIFICATION_SCHEDULE_HOUR, minute=NOTIFICATION_SCHEDULE_MINUTE, second=0, microsecond=0)
-                
-                # If it's past scheduled time today, schedule for tomorrow
-                if now.time() > time(NOTIFICATION_SCHEDULE_HOUR, NOTIFICATION_SCHEDULE_MINUTE):
-                    target_time = target_time + timedelta(days=1)
-                
-                # Calculate sleep time
-                sleep_seconds = (target_time - now).total_seconds()
-                logger.info(f"Next notification run scheduled for: {target_time}")
-                
-                await asyncio.sleep(sleep_seconds)
-                
-                # Run the notification phase
-                logger.info("Starting daily notification phase")
-                await self.daily_notifications()
-                logger.info("Daily notification phase completed")
-                
-                # Reset error counter on successful run
-                consecutive_errors = 0
-                
-            except asyncio.CancelledError:
-                logger.info("Notification scheduler cancelled")
-                break
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Error in notification scheduler (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Notification scheduler failed {max_consecutive_errors} consecutive times, giving up")
-                    from ..apps import CeciliaServiceError
-                    raise CeciliaServiceError(f"Notification scheduler failed repeatedly: {e}")
-                
-                # Sleep for an hour before retrying
-                await asyncio.sleep(3600)
+        await scheduler_manager.run_notification_scheduler(
+            NOTIFICATION_SCHEDULE_HOUR, 
+            NOTIFICATION_SCHEDULE_MINUTE, 
+            self.daily_notifications
+        )
 
     async def start_scheduler(self):
         """Start both summarization and notification schedulers"""
-        logger.info("Starting both summarization and notification schedulers")
-        
-        # Create tasks for both schedulers
-        summarization_task = asyncio.create_task(self.start_summarization_scheduler())
-        notification_task = asyncio.create_task(self.start_notification_scheduler())
-        
-        try:
-            # Run both schedulers concurrently
-            await asyncio.gather(summarization_task, notification_task)
-        except asyncio.CancelledError:
-            logger.info("Both schedulers cancelled")
-            summarization_task.cancel()
-            notification_task.cancel()
-        except Exception as e:
-            logger.error(f"Error in main scheduler: {e}")
-            summarization_task.cancel()
-            notification_task.cancel()
-            raise
+        await scheduler_manager.run_dual_scheduler(
+            SUMMARIZATION_SCHEDULE_HOUR,
+            SUMMARIZATION_SCHEDULE_MINUTE,
+            NOTIFICATION_SCHEDULE_HOUR,
+            NOTIFICATION_SCHEDULE_MINUTE,
+            self.daily_summarization,
+            self.daily_notifications
+        )
 
     def _get_daily_results_file(self) -> Path:
         """Get path for today's daily results file"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        return self.base_dir / f"daily_results_{today}.json"
+        return data_manager.get_daily_results_file(self.base_dir)
     
     async def _save_daily_results(self, results: Dict):
         """Save daily summarization results for later notification"""
-        try:
-            results_file = self._get_daily_results_file()
-            
-            # Load existing results if any
-            existing_results = {}
-            if results_file.exists():
-                async with aiofiles.open(results_file, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    existing_results = json.loads(content)
-            
-            # Merge new results
-            existing_results.update(results)
-            
-            # Save updated results
-            async with aiofiles.open(results_file, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(existing_results, indent=2, ensure_ascii=False))
-            
-            logger.info(f"Saved daily results to {results_file}")
-            
-        except Exception as e:
-            logger.error(f"Error saving daily results: {e}")
+        await data_manager.save_daily_results(results, self.base_dir)
     
     async def _load_daily_results(self) -> Dict:
         """Load today's daily results for notification"""
-        try:
-            results_file = self._get_daily_results_file()
-            
-            if not results_file.exists():
-                logger.info("No daily results file found for today")
-                return {}
-            
-            async with aiofiles.open(results_file, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                results = json.loads(content)
-            
-            logger.info(f"Loaded daily results from {results_file}")
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error loading daily results: {e}")
-            return {}
+        return await data_manager.load_daily_results(self.base_dir)
     
     async def _cleanup_old_results(self):
         """Clean up results files older than 8 days"""
-        try:
-            cutoff_date = datetime.now() - timedelta(days=8)
-            
-            for file_path in self.base_dir.glob("daily_results_*.json"):
-                try:
-                    # Extract date from filename
-                    date_str = file_path.stem.replace("daily_results_", "")
-                    file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                    
-                    if file_date < cutoff_date:
-                        file_path.unlink()
-                        logger.info(f"Cleaned up old results file: {file_path}")
-                        
-                except Exception as e:
-                    logger.warning(f"Error processing results file {file_path}: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Error during results cleanup: {e}")
+        await data_manager.cleanup_old_results(self.base_dir)
 
     async def _process_paper_pipeline(self, paper: Dict, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """Process a single paper through the complete pipeline with concurrency control"""
