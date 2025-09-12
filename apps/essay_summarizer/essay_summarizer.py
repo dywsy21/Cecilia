@@ -13,7 +13,8 @@ from typing import List, Dict, Optional
 import hashlib
 import re
 
-from bot.config import SUBSCRIPTION_ONLY_NEW
+from apps import llm_handler
+from bot.config import OLLAMA_BASE_URL, SUBSCRIPTION_ONLY_NEW
 from ..email_service.email_service import EmailService
 from ..llm_handler.llm_handler import LLMHandler
 
@@ -43,6 +44,9 @@ class EssaySummarizer:
             # App manager reference (set by app manager)
             self.app_manager = None
             
+            # Arxiv searching api base url
+            self.arxiv_base_url = "https://export.arxiv.org/api/query"
+            
             logger.info("EssaySummarizer initialized successfully")
             
         except PermissionError as e:
@@ -60,7 +64,7 @@ class EssaySummarizer:
         self.app_manager = app_manager
     
     async def search_arxiv(self, category: str, topic: str, max_results: int = 10) -> List[Dict]:
-        """Search ArXiv for papers on a specific category and topic"""
+        """Search for papers on a specific category and topic"""
         try:
             # Build search query based on category
             search_query = f'{category if category else 'all'}.{topic}'
@@ -360,62 +364,6 @@ class EssaySummarizer:
             return None
         except Exception as e:
             logger.error(f"Error converting PDF to markdown: {e}")
-            return None
-    
-    async def summarize_with_ollama(self, paper_content: str, paper_title: str) -> Optional[str]:
-        """Summarize paper content using Ollama"""
-        try:
-            prompt = f"""请为这篇研究论文提供清晰简洁的总结。重点关注：
-1. 主要研究问题或问题
-2. 关键方法或途径
-3. 主要发现或贡献
-4. 实际意义或应用
-
-总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
-
-总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。
-
-论文标题：{paper_title}
-
-论文内容：
-{paper_content[:15000]}
-
-再重申一次，请为这篇研究论文提供清晰简洁的总结。重点关注：
-1. 主要研究问题或问题
-2. 关键方法或途径
-3. 主要发现或贡献
-4. 实际意义或应用
-
-总结应该便于一般学术读者理解，应该非常简短并保持重点，持在300字以内。**请用中文而不是英文撰写回答!**
-
-总结应该使用正规的markdown格式书写，条理清晰，但你不需将文本包在```markdown代码框中。
-"""
-
-            payload = {
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.ollima_url, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        summary = result.get('response', '')
-                        
-                        # Remove thinking tags if present
-                        if '<think>' in summary:
-                            import re
-                            summary = re.sub(r'<think>.*?</think>', '', summary, flags=re.DOTALL)
-                            summary = summary.strip()
-                        
-                        return summary
-                    else:
-                        logger.error(f"ollima API error: {response.status}")
-                        return None
-                        
-        except Exception as e:
-            logger.error(f"Error summarizing with ollama: {e}")
             return None
     
     async def summarize_with_llm(self, paper_content: str, paper_title: str) -> Optional[str]:
