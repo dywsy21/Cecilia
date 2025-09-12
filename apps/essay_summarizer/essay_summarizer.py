@@ -670,40 +670,73 @@ class EssaySummarizer:
         """Clean up results files older than 8 days"""
         await data_manager.cleanup_old_results(self.base_dir)
 
-    async def _process_paper_pipeline(self, paper: Dict, semaphore: asyncio.Semaphore) -> Optional[Dict]:
-        """Process a single paper through the complete pipeline with concurrency control"""
-        async with semaphore:
+    async def _download_and_convert_paper(self, paper: Dict, download_semaphore: asyncio.Semaphore, processing_queue: asyncio.Queue) -> None:
+        """Download and convert a single paper, then put it in processing queue"""
+        async with download_semaphore:
             try:
                 paper_id = paper['id']
-                logger.info(f"Starting pipeline for paper {paper_id}")
+                logger.info(f"Starting download for paper {paper_id}")
                 
-                # Step 1: Download PDF
+                # Step 1: Download PDF (limited concurrency)
                 logger.debug(f"Downloading PDF for paper {paper_id}")
                 pdf_path = await self.download_pdf(paper.get('pdf_url', ''), paper_id)
                 if not pdf_path:
                     logger.warning(f"Could not download PDF for paper {paper_id}")
-                    return None
+                    await processing_queue.put(None)  # Signal failure
+                    return
                 
-                # Step 2: Convert to markdown
+                # Step 2: Convert to markdown (still within download limit)
                 logger.debug(f"Converting PDF to markdown for paper {paper_id}")
                 markdown_content = await self.pdf_to_markdown(pdf_path)
                 if not markdown_content:
                     logger.warning(f"Could not convert PDF to markdown for paper {paper_id}")
-                    return None
+                    await processing_queue.put(None)  # Signal failure
+                    return
                 
-                # Step 3: Summarize with LLM
+                # Put the prepared data into processing queue
+                paper_data = {
+                    'paper': paper,
+                    'markdown_content': markdown_content
+                }
+                await processing_queue.put(paper_data)
+                logger.info(f"Paper {paper_id} ready for summarization")
+                
+            except Exception as e:
+                logger.error(f"Error downloading/converting paper {paper.get('id', 'unknown')}: {e}")
+                await processing_queue.put(None)  # Signal failure
+
+    async def _summarize_paper_worker(self, processing_queue: asyncio.Queue, results_list: List, total_papers: int) -> None:
+        """Worker that processes papers from the queue and generates summaries (unlimited concurrency)"""
+        while True:
+            try:
+                # Get paper from queue
+                paper_data = await processing_queue.get()
+                
+                # None signals end of processing or failure
+                if paper_data is None:
+                    processing_queue.task_done()
+                    continue
+                
+                paper = paper_data['paper']
+                markdown_content = paper_data['markdown_content']
+                paper_id = paper['id']
+                
+                logger.info(f"Starting summarization for paper {paper_id}")
+                
+                # Step 3: Summarize with LLM (unlimited concurrency)
                 logger.debug(f"Generating AI summary for paper {paper_id}")
                 summary = await self.summarize_with_llm(markdown_content, paper['title'])
                 if not summary:
                     logger.warning(f"Could not generate summary for paper {paper_id}")
-                    return None
+                    processing_queue.task_done()
+                    continue
                 
                 # Step 4: Save summary
                 logger.debug(f"Saving summary for paper {paper_id}")
                 await self._save_paper_summary(paper, summary)
                 
-                logger.info(f"Successfully completed pipeline for paper {paper_id}")
-                return {
+                # Add to results
+                result = {
                     'title': paper['title'],
                     'authors': paper['authors'],
                     'summary': summary,
@@ -711,42 +744,60 @@ class EssaySummarizer:
                     'categories': paper.get('categories', []),
                     'id': paper_id
                 }
+                results_list.append(result)
+                
+                logger.info(f"Successfully completed summarization for paper {paper_id}")
                 
             except Exception as e:
-                logger.error(f"Error in pipeline for paper {paper.get('id', 'unknown')}: {e}")
-                return None
+                logger.error(f"Error in summarization worker: {e}")
+            finally:
+                processing_queue.task_done()
 
-    async def _process_papers_parallel(self, papers_to_process: List[Dict], max_concurrent: int = 3) -> List[Dict]:
-        """Process multiple papers in parallel with controlled concurrency"""
+    async def _process_papers_parallel(self, papers_to_process: List[Dict], max_concurrent_downloads: int = 3) -> List[Dict]:
+        """Process papers with separated download and summarization phases"""
         if not papers_to_process:
             return []
         
-        logger.info(f"Starting parallel processing of {len(papers_to_process)} papers with max {max_concurrent} concurrent tasks")
+        logger.info(f"Starting separated processing of {len(papers_to_process)} papers with max {max_concurrent_downloads} concurrent downloads")
         
-        # Create semaphore to limit concurrent downloads/processing
-        semaphore = asyncio.Semaphore(max_concurrent)
+        # Create queue for passing data from download to summarization
+        processing_queue = asyncio.Queue()
+        results_list = []
         
-        # Create tasks for all papers
-        tasks = []
+        # Create semaphore to limit concurrent downloads only
+        download_semaphore = asyncio.Semaphore(max_concurrent_downloads)
+        
+        # Start download tasks (limited concurrency)
+        download_tasks = []
         for paper in papers_to_process:
-            task = asyncio.create_task(self._process_paper_pipeline(paper, semaphore))
-            tasks.append(task)
+            task = asyncio.create_task(
+                self._download_and_convert_paper(paper, download_semaphore, processing_queue)
+            )
+            download_tasks.append(task)
         
-        # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Start summarization workers (unlimited concurrency - one per paper)
+        summarization_tasks = []
+        for _ in papers_to_process:
+            task = asyncio.create_task(
+                self._summarize_paper_worker(processing_queue, results_list, len(papers_to_process))
+            )
+            summarization_tasks.append(task)
         
-        # Filter out None results and exceptions
-        successful_papers = []
-        failed_count = 0
+        # Wait for all downloads to complete
+        await asyncio.gather(*download_tasks, return_exceptions=True)
         
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Task {i} failed with exception: {result}")
-                failed_count += 1
-            elif result is not None:
-                successful_papers.append(result)
-            else:
-                failed_count += 1
+        # Wait for all items in queue to be processed
+        await processing_queue.join()
         
-        logger.info(f"Parallel processing completed: {len(successful_papers)} successful, {failed_count} failed")
-        return successful_papers
+        # Cancel summarization workers
+        for task in summarization_tasks:
+            task.cancel()
+        
+        # Wait for workers to finish cancelling
+        await asyncio.gather(*summarization_tasks, return_exceptions=True)
+        
+        successful_count = len(results_list)
+        failed_count = len(papers_to_process) - successful_count
+        
+        logger.info(f"Separated processing completed: {successful_count} successful, {failed_count} failed")
+        return results_list
