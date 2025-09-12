@@ -40,22 +40,38 @@ def get_paper_color(index: int) -> str:
 def create_paper_embed(paper: Dict, index: int, total_count: int, category: str, topic: str) -> Dict:
     """Create individual embed for a single paper with full utilization of embed limits"""
     
-    # Prepare authors string
-    authors_str = ", ".join(paper['authors'])
-    if len(authors_str) > 200:  # Limit for field value
-        authors_str = truncate_text(authors_str, 200)
+    # Prepare authors string with Discord field limit (1024 chars)
+    authors_str = ", ".join(paper['authors']) if paper['authors'] else ""
+    if len(authors_str) > 1024:  # Discord field value limit
+        authors_str = truncate_text(authors_str, 1021)  # Leave space for "..."
     
-    # Prepare categories string
-    categories_str = ", ".join(paper['categories'])
-    if len(categories_str) > 200:
-        categories_str = truncate_text(categories_str, 200)
+    # Prepare categories string with Discord field limit (1024 chars)
+    categories_str = ", ".join(paper['categories']) if paper['categories'] else ""
+    if len(categories_str) > 1024:  # Discord field value limit
+        categories_str = truncate_text(categories_str, 1021)  # Leave space for "..."
     
-    # Truncate title for embed title (256 char limit)
-    title = truncate_text(paper['title'], 250)
+    # Truncate title for embed title (Discord limit: 256 chars)
+    title = paper['title']
+    if len(title) > 256:
+        title = truncate_text(title, 253)  # Leave space for "..."
     
     # Use full 4096 character limit for description with the AI summary
     description = f"**论文总结：**\n\n{paper['summary']}"
-    description = truncate_text(description, 4090)  # Leave some buffer
+    
+    # Check if description exceeds Discord's limit and truncate if needed
+    if len(description) > 4096:
+        # Calculate available space for summary (4096 - "**论文总结：**\n\n" - "...")
+        header_text = "**论文总结：**\n\n"
+        ellipsis = "..."
+        available_space = 4096 - len(header_text) - len(ellipsis)
+        
+        # Truncate summary at word boundary
+        truncated_summary = truncate_text(paper['summary'], available_space)
+        description = f"{header_text}{truncated_summary}"
+        
+        # If still too long (shouldn't happen), force truncate
+        if len(description) > 4096:
+            description = description[:4093] + "..."
     
     # Create rich embed with visual appeal
     embed = {
@@ -65,12 +81,12 @@ def create_paper_embed(paper: Dict, index: int, total_count: int, category: str,
         "fields": [
             {
                 "name": "👥 作者",
-                "value": authors_str,
+                "value": authors_str if authors_str else "未知作者",
                 "inline": False
             },
             {
-                "name": "🏷️ 分类",
-                "value": categories_str or "未分类",
+                "name": "🏷️ 分类", 
+                "value": categories_str if categories_str else "未分类",
                 "inline": True
             },
             {
@@ -90,6 +106,7 @@ def create_paper_embed(paper: Dict, index: int, total_count: int, category: str,
     }
     
     return embed
+
 
 def create_summary_header_embed(category: str, topic: str, total_papers: int, new_count: int, cached_count: int, model_name: str, only_new: bool = False) -> Dict:
     """Create header embed with summary statistics"""

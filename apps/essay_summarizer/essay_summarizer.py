@@ -1,7 +1,10 @@
 import asyncio
 import logging
 from datetime import datetime
+import math
 from pathlib import Path
+import random
+import time
 from typing import List, Dict, Optional
 
 from bot.config import (
@@ -769,11 +772,14 @@ class EssaySummarizer:
         
         # Start download tasks (limited concurrency)
         download_tasks = []
-        for paper in papers_to_process:
+        for i, paper in enumerate(papers_to_process):
             task = asyncio.create_task(
                 self._download_and_convert_paper(paper, download_semaphore, processing_queue)
             )
             download_tasks.append(task)
+            # Add delay between starting downloads to avoid overwhelming the server
+            if i < len(papers_to_process) - 1:  # Don't wait after the last task
+                await asyncio.sleep(random.uniform(1, 3))  # 1-3 second delay between task starts
         
         # Start summarization workers (unlimited concurrency - one per paper)
         summarization_tasks = []
