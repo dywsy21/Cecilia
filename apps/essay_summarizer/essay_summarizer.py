@@ -60,33 +60,65 @@ class EssaySummarizer:
         self.app_manager = app_manager
     
     async def search_arxiv(self, category: str, topic: str, max_results: int = 10) -> List[Dict]:
-        """Search for papers on a specific category and topic"""
-        try:
-            # Build search query based on category
-            search_query = f'{category if category else 'all'}.{topic}'
+        """Search for papers on a specific category and topic with retry logic"""
+        max_retries = 8
+        retry_delay = 2  # Start with 2 seconds delay
+        
+        for attempt in range(max_retries):
+            try:
+                # Build search query based on category
+                search_query = f'{category if category else 'all'}.{topic}'
+                
+                params = {
+                    'search_query': search_query,
+                    'sortBy': 'lastUpdatedDate',
+                    'sortOrder': 'descending',
+                    'start': 0,
+                    'max_results': max_results
+                }
+                
+                logger.info(f"Searching ArXiv with query: {search_query} (attempt {attempt + 1}/{max_retries})")
+                
+                # Use timeout for the request
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(self.arxiv_base_url, params=params) as response:
+                        if response.status == 200:
+                            xml_content = await response.text()
+                            papers = await self._parse_arxiv_response(xml_content)
+                            logger.info(f"Successfully retrieved {len(papers)} papers from ArXiv (attempt {attempt + 1})")
+                            return papers
+                        else:
+                            logger.warning(f"ArXiv API returned status {response.status} on attempt {attempt + 1}")
+                            if attempt == max_retries - 1:
+                                logger.error(f"Failed to search ArXiv after {max_retries} attempts: HTTP {response.status}")
+                                return []
+                            
+            except asyncio.TimeoutError:
+                logger.warning(f"ArXiv search timeout on attempt {attempt + 1}/{max_retries}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: timeout")
+                    return []
+                    
+            except aiohttp.ClientError as e:
+                logger.warning(f"ArXiv client error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: {e}")
+                    return []
+                    
+            except Exception as e:
+                logger.warning(f"Unexpected error searching ArXiv on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to search ArXiv after {max_retries} attempts: {e}")
+                    return []
             
-            params = {
-                'search_query': search_query,
-                'sortBy': 'lastUpdatedDate',
-                'sortOrder': 'descending',
-                'start': 0,
-                'max_results': max_results
-            }
-            
-            logger.info(f"Searching ArXiv with query: {search_query}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.arxiv_base_url, params=params) as response:
-                    if response.status == 200:
-                        xml_content = await response.text()
-                        return await self._parse_arxiv_response(xml_content)
-                    else:
-                        logger.error(f"ArXiv API returned status {response.status}")
-                        return []
-                        
-        except Exception as e:
-            logger.error(f"Error searching ArXiv: {e}")
-            return []
+            # Wait before retry (exponential backoff)
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (2 ** attempt)  # 2s, 4s, 8s, 16s
+                logger.info(f"Waiting {wait_time}s before retry...")
+                await asyncio.sleep(wait_time)
+        
+        return []
     
     async def _parse_arxiv_response(self, xml_content: str) -> List[Dict]:
         """Parse XML response from ArXiv API"""
