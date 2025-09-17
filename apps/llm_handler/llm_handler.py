@@ -190,7 +190,7 @@ class LLMHandler:
                 async with session.post(f"{self.base_url}/chat/completions", 
                                       headers=headers, 
                                       json=payload, 
-                                      timeout=300) as response:
+                                      timeout=3000) as response:
                     if response.status == 200:
                         result = await response.json()
                         if 'choices' in result and len(result['choices']) > 0:

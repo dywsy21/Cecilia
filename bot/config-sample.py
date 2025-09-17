@@ -21,7 +21,7 @@ SUBSCRIPTION_ONLY_NEW = True  # Only send papers that haven't been processed bef
 
 # Scheduler Explanation:
 # 
-# The system now uses two separate schedulers:
+# The system uses two separate schedulers:
 # 
 # 1. SUMMARIZATION SCHEDULER (default: 6:00 AM)
 #    - Downloads and processes all papers from ArXiv
@@ -34,10 +34,3 @@ SUBSCRIPTION_ONLY_NEW = True  # Only send papers that haven't been processed bef
 #    - Sends email notifications to configured addresses
 #    - Uses the results from the summarization phase
 #    - This is the lightweight delivery phase
-#
-# Benefits of this separation:
-# - Parallel processing improves summarization speed
-# - Notifications are sent immediately after processing
-# - Better error handling and retry logic
-# - Can adjust timing for different time zones
-# - Reduces load on Discord/email servers by separating heavy processing
