@@ -34,3 +34,13 @@ SUBSCRIPTION_ONLY_NEW = True  # Only send papers that haven't been processed bef
 #    - Sends email notifications to configured addresses
 #    - Uses the results from the summarization phase
 #    - This is the lightweight delivery phase
+
+# Deep Research Configuration
+DEEP_RESEARCH_INNER_PORT = 3333        # Port of the original deep research server
+DEEP_RESEARCH_OUTER_PORT = 3334        # Port of our wrapper MCP server  
+DEEP_RESEARCH_CHANNEL = 1419937374670159873  # Discord channel ID for deep research reports
+
+# Deep Research MCP Settings
+DEEP_RESEARCH_LANGUAGE = "en"                  # Default research language
+DEEP_RESEARCH_MAX_RESULTS = 10                 # Maximum search results per query
+

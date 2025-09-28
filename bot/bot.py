@@ -10,7 +10,7 @@ import nacl.signing
 import nacl.encoding
 from nacl.exceptions import BadSignatureError
 
-from bot.config import SUBSCRIPTION_ONLY_NEW
+from bot.config import SUBSCRIPTION_ONLY_NEW, DEEP_RESEARCH_CHANNEL
 from .auths import DISCORD_TOKEN, APP_ID, PUBLIC_KEY, ADMIN_USER_ID
 from apps.apps import AppManager
 import aiohttp
@@ -109,6 +109,38 @@ class CeciliaBot(commands.Bot):
                         "choices": [
                             {"name": "discord", "value": "discord"},
                             {"name": "email", "value": "email"}
+                        ]
+                    }
+                ]
+            },
+            {
+                "name": "deep_research",
+                "type": 1,
+                "description": "Conduct comprehensive deep research on any topic and get results in Discord",
+                "options": [
+                    {
+                        "name": "topic",
+                        "description": "Research topic or question",
+                        "type": 3,  # STRING
+                        "required": True
+                    },
+                    {
+                        "name": "language",
+                        "description": "Response language (en, zh, es, etc.)",
+                        "type": 3,  # STRING
+                        "required": False
+                    },
+                    {
+                        "name": "provider",
+                        "description": "AI provider (google, openai, anthropic, etc.)",
+                        "type": 3,  # STRING
+                        "required": False,
+                        "choices": [
+                            {"name": "Google (Gemini)", "value": "google"},
+                            {"name": "OpenAI", "value": "openai"},
+                            {"name": "Anthropic", "value": "anthropic"},
+                            {"name": "DeepSeek", "value": "deepseek"},
+                            {"name": "Mistral", "value": "mistral"}
                         ]
                     }
                 ]
@@ -452,6 +484,44 @@ class CeciliaBot(commands.Bot):
                             'type': 5,  # Deferred response
                         })
 
+                elif command_name == 'deep_research':
+                    # Get parameters
+                    options = command_data.get('options', [])
+                    topic = None
+                    language = None
+                    provider = None
+                    
+                    for option in options:
+                        if option.get('name') == 'topic':
+                            topic = option.get('value')
+                        elif option.get('name') == 'language':
+                            language = option.get('value')
+                        elif option.get('name') == 'provider':
+                            provider = option.get('value')
+                    
+                    if not topic:
+                        return web.json_response({
+                            'type': 4,
+                            'data': {
+                                'content': 'Please provide a research topic!'
+                            }
+                        })
+                    
+                    user = data.get('member', {}).get('user', data.get('user', {}))
+                    user_id = user.get('id')
+                    username = user.get('username', 'User')
+                    
+                    # Start background deep research
+                    asyncio.create_task(self.handle_deep_research_command(data, topic, language, provider, user_id, username))
+                    
+                    return web.json_response({
+                        'type': 4,
+                        'data': {
+                            'content': f'🔬 Starting comprehensive deep research on **"{topic}"**...\n\n✨ I\'ll conduct thorough analysis using multiple sources and AI models, then deliver a beautiful PDF report to <#{DEEP_RESEARCH_CHANNEL}>!\n\n⏱️ This usually takes 2-5 minutes. I\'ll ping you when it\'s ready! 🤖',
+                            'flags': 64  # Ephemeral
+                        }
+                    })
+                
                 else:
                     return web.json_response({
                         'type': 4,
@@ -578,6 +648,93 @@ class CeciliaBot(commands.Bot):
             # Send error via message pusher API
             error_message = f"❌ Sorry, there was an error processing your request for '{topic}' in category '{category}': {str(e)}"
             await self._send_error_via_api(user_id, error_message)
+
+    async def handle_deep_research_command(self, interaction_data, topic, language, provider, user_id, username):
+        """Handle deep research command"""
+        try:
+            logger.info(f"Starting deep research for user {username} ({user_id}) on topic: {topic}")
+            
+            # Prepare research parameters
+            research_kwargs = {}
+            if language:
+                research_kwargs['language'] = language
+            if provider:
+                research_kwargs['provider'] = provider
+            
+            # Trigger deep research
+            result = await self.app_manager.trigger_deep_research(topic, **research_kwargs)
+            
+            # Send completion notification to user
+            if result['success']:
+                # Send success message via DM or channel
+                success_message = {
+                    "embed": {
+                        "title": "🎉 Deep Research Completed!",
+                        "description": f"Your comprehensive research on **{topic}** has been completed and delivered to the research channel!",
+                        "color": "#00ff9f",
+                        "fields": [
+                            {
+                                "name": "📝 Topic",
+                                "value": topic,
+                                "inline": False
+                            },
+                            {
+                                "name": "📊 Status",
+                                "value": "✅ Successfully completed",
+                                "inline": True
+                            },
+                            {
+                                "name": "📄 Delivery",
+                                "value": f"PDF sent to <#{DEEP_RESEARCH_CHANNEL}>",
+                                "inline": True
+                            }
+                        ],
+                        "footer": {
+                            "text": "Thank you for using Cecilia's Deep Research! 🤖✨"
+                        }
+                    }
+                }
+                
+                await self._send_message_via_api(user_id, success_message)
+                
+            else:
+                # Send error message
+                error_message = {
+                    "embed": {
+                        "title": "❌ Deep Research Failed",
+                        "description": f"Sorry, I encountered an error while researching **{topic}**.",
+                        "color": "#ff4757",
+                        "fields": [
+                            {
+                                "name": "Error Details",
+                                "value": result.get('error', 'Unknown error'),
+                                "inline": False
+                            }
+                        ]
+                    }
+                }
+                
+                await self._send_message_via_api(user_id, error_message)
+                
+        except Exception as e:
+            logger.error(f"Error in deep research command: {e}")
+            # Send error notification
+            error_message = {
+                "embed": {
+                    "title": "❌ Deep Research System Error",
+                    "description": f"I encountered a system error while processing your research on **{topic}**.",
+                    "color": "#ff4757",
+                    "fields": [
+                        {
+                            "name": "Error Details",
+                            "value": str(e),
+                            "inline": False
+                        }
+                    ]
+                }
+            }
+            
+            await self._send_message_via_api(user_id, error_message)
 
     async def send_followup_response(self, interaction_data, response_data):
         """Send a followup response to an interaction"""

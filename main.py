@@ -33,11 +33,12 @@ async def main():
         pusher_task = asyncio.create_task(bot.app_manager.start_msg_pusher_server(8011))
         interactions_task = asyncio.create_task(bot.start_interactions_server(8010))
         scheduler_task = asyncio.create_task(bot.app_manager.start_essay_scheduler())
+        deep_research_task = asyncio.create_task(bot.app_manager.start_deep_research_wrapper())
         
-        logger.info("Starting Discord bot, MessagePusher server, Interactions webhook, and Essay scheduler...")
+        logger.info("Starting Discord bot, MessagePusher server, Interactions webhook, Essay scheduler, and Deep Research wrapper...")
         
         # Wait for all tasks
-        await asyncio.gather(bot_task, pusher_task, interactions_task, scheduler_task)
+        await asyncio.gather(bot_task, pusher_task, interactions_task, scheduler_task, deep_research_task)
         
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
