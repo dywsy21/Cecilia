@@ -13,8 +13,8 @@ pip install -r requirements.txt
 
 # Copy configuration files
 echo "📄 Setting up configuration files..."
-cp bot/config-sample.py bot/config.py
-cp bot/auths-sample.py bot/auths.py
+# cp bot/config-sample.py bot/config.py
+# cp bot/auths-sample.py bot/auths.py
 
 # Create data directories
 echo "📁 Creating data directories..."

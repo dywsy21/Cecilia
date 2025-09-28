@@ -4,3 +4,4 @@ bot/auths.py
 data
 **/node_modules
 bot/config.py
+ui/package-lock.json
