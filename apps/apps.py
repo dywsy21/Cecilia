@@ -3,6 +3,7 @@ import logging
 from .essay_summarizer.essay_summarizer import EssaySummarizer
 from .msg_pusher.msg_pusher import create_message_pusher
 from .ollama_monitor.ollama_monitor import OllamaMonitor
+from .subscription_service.subscription_service import SubscriptionService
 from apps.deep_research_wrapper.deep_research_wrapper import DeepResearchWrapper, run_deep_research_wrapper_server
 from bot.config import (
     DEEP_RESEARCH_INNER_PORT, DEEP_RESEARCH_OUTER_PORT, 
@@ -23,8 +24,10 @@ class AppManager:
         try:
             self.essay_summarizer = EssaySummarizer()
             self.msg_pusher = None
+            self.subscription_service = SubscriptionService()
             self.bot_instance = bot_instance
             self.scheduler_task = None
+            self.subscription_server_task = None
             self.ollama_monitor = OllamaMonitor()
             self.deep_research_wrapper = None
             self.deep_research_task = None
@@ -103,6 +106,63 @@ class AppManager:
             logger.error(f"Failed to start Deep Research Wrapper server: {e}")
             raise CeciliaServiceError(f"Cannot start Deep Research Wrapper server: {e}")
     
+    async def start_subscription_service(self, port: int = 8012):
+        """Start the subscription service HTTP server"""
+        try:
+            from aiohttp import web
+            
+            app = web.Application()
+            self.subscription_service.setup_routes(app)
+            
+            # Add CORS middleware
+            async def cors_middleware(request, handler):
+                if request.method == 'OPTIONS':
+                    return web.Response(
+                        headers={
+                            'Access-Control-Allow-Origin': '*',
+                            'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+                            'Access-Control-Allow-Headers': 'Content-Type',
+                            'Access-Control-Max-Age': '86400'
+                        }
+                    )
+                
+                response = await handler(request)
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            
+            app.middlewares.append(cors_middleware)
+            
+            # Start cleanup task
+            await self.subscription_service.start_cleanup_task()
+            
+            # Start server
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '127.0.0.1', port)
+            await site.start()
+            
+            logger.info(f"Subscription service started on port {port}")
+            
+            # Keep the server running
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                logger.info("Subscription service stopping...")
+                await self.subscription_service.shutdown()
+                await runner.cleanup()
+                
+        except OSError as e:
+            if e.errno == 98:
+                logger.error(f"Port {port} already in use - cannot start subscription service")
+                raise CeciliaServiceError(f"Cannot bind to port {port} - address already in use")
+            else:
+                logger.error(f"OS error starting subscription service: {e}")
+                raise CeciliaServiceError(f"System error starting subscription service: {e}")
+        except Exception as e:
+            logger.error(f"Failed to start subscription service: {e}")
+            raise CeciliaServiceError(f"Cannot start subscription service: {e}")
+    
     async def trigger_deep_research(self, topic: str, **kwargs) -> dict:
         """Trigger a deep research session"""
         try:
@@ -156,7 +216,7 @@ class AppManager:
             return f"Sorry, I couldn't summarize essays for '{topic}'. Error: {str(e)}"
     
     async def get_status(self) -> dict:
-        """Get status of all apps including Ollama and Deep Research"""
+        """Get status of all apps including subscription service"""
         try:
             # Get Ollama status
             async with self.ollama_monitor as monitor:
@@ -169,7 +229,8 @@ class AppManager:
                 "ollama": ollama_status.get('status', 'unknown'),
                 "ollama_models": ollama_status.get('models_count', 0),
                 "deep_research": "running" if self.deep_research_task and not self.deep_research_task.done() else "stopped",
-                "total_apps": 4  # Updated to include Deep Research
+                "subscription_service": "running" if self.subscription_server_task and not self.subscription_server_task.done() else "stopped",
+                "total_apps": 5  # Updated count
             }
             return status
         except Exception as e:
@@ -181,7 +242,8 @@ class AppManager:
                 "ollama": "error",
                 "ollama_models": 0,
                 "deep_research": "error",
-                "total_apps": 4
+                "subscription_service": "error",
+                "total_apps": 5
             }
     
     async def get_ollama_resources(self) -> dict:
@@ -220,6 +282,14 @@ class AppManager:
                 except asyncio.CancelledError:
                     pass
                 logger.info("Deep Research Wrapper stopped")
+                
+            if self.subscription_server_task and not self.subscription_server_task.done():
+                self.subscription_server_task.cancel()
+                try:
+                    await self.subscription_server_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Subscription service stopped")
         except Exception as e:
             logger.error(f"Error shutting down services: {e}")
                 
