@@ -1,4 +1,4 @@
-<!-- filepath: ui/src/App.vue -->
+<!-- filepath: c:\Users\Admin\Desktop\Cecilia\ui\src\App.vue -->
 <template>
   <div class="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
     <!-- Header -->
@@ -100,7 +100,6 @@
                   pattern="[0-9]{6}"
                   :disabled="isVerifying"
                   :class="[
-
                     'block w-full px-4 py-3 text-center text-2xl font-mono tracking-wider rounded-lg border-2 transition-colors duration-200',
                     'focus:outline-none focus:ring-0',
                     verificationError ? 'border-red-300 focus:border-red-500' :
@@ -136,7 +135,6 @@
                   @click="verifyEmail"
                   :disabled="!canVerify || isVerifying"
                   :class="[
-
                     'px-8 py-3 rounded-lg font-medium transition-all duration-200',
                     'focus:outline-none focus:ring-2 focus:ring-offset-2',
                     canVerify && !isVerifying
@@ -169,12 +167,11 @@
                   id="email"
                   v-model="email"
                   type="email"
-                  :disabled="isSubmitting || emailSent"
+                  :disabled="isSubmitting"
                   :class="[
                     'block w-full px-4 py-3 rounded-lg border-2 transition-colors duration-200',
                     'focus:outline-none focus:ring-0',
                     emailError ? 'border-red-300 focus:border-red-500' :
-                    emailSent ? 'border-green-300 bg-green-50' :
                     'border-gray-300 focus:border-indigo-500'
                   ]"
                   placeholder="researcher@university.edu"
@@ -182,17 +179,13 @@
                   @input="clearEmailError"
                 />
                 <div class="absolute inset-y-0 right-0 pr-3 flex items-center">
-                  <CheckIcon v-if="emailSent" class="w-5 h-5 text-green-500" />
-                  <ExclamationCircleIcon v-else-if="emailError" class="w-5 h-5 text-red-500" />
+                  <ExclamationCircleIcon v-if="emailError" class="w-5 h-5 text-red-500" />
                   <AtSymbolIcon v-else class="w-5 h-5 text-gray-400" />
                 </div>
               </div>
               <p v-if="emailError" class="mt-1 text-sm text-red-600">{{ emailError }}</p>
-              <p v-else-if="emailSent" class="mt-1 text-sm text-green-600">
-                Confirmation email sent! Please check your inbox and click the confirmation link.
-              </p>
               <p v-else class="mt-1 text-sm text-gray-500">
-                We'll send you a confirmation email before activating your subscription
+                We'll send you a verification email before activating your subscription
               </p>
             </div>
 
@@ -300,7 +293,6 @@
                 @click="submitSubscription"
                 :disabled="!canSubmit || isSubmitting"
                 :class="[
-
                   'px-8 py-3 rounded-lg font-medium transition-all duration-200',
                   'focus:outline-none focus:ring-2 focus:ring-offset-2',
                   canSubmit && !isSubmitting
@@ -375,9 +367,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useToast } from 'vue-toastification'
-import axios from 'axios'
 import {
   CheckIcon,
   ExclamationCircleIcon,
@@ -397,14 +388,11 @@ const toast = useToast()
 // Reactive state
 const email = ref('')
 const emailError = ref('')
-const emailSent = ref(false)
 const selectedTopics = ref([])
 const searchTerm = ref('')
 const isSubmitting = ref(false)
-const rateLimitInfo = reactive({
-  remaining: 5,
-  resetTime: null
-})
+
+// Verification state
 const verificationStep = ref(false)
 const verificationCode = ref('')
 const verificationError = ref('')
@@ -570,8 +558,7 @@ const canSubmit = computed(() => {
   return email.value &&
          selectedTopics.value.length >= 5 &&
          !emailError.value &&
-         !emailSent.value &&
-         rateLimitInfo.remaining > 0
+         !isSubmitting.value
 })
 
 const canVerify = computed(() => {
@@ -611,13 +598,6 @@ const removeSelectedTopic = (topicId) => {
     selectedTopics.value.splice(index, 1)
   }
 }
-
-const checkRateLimit = () => {
-    }))
-  } catch (e) {
-    console.warn('Failed to save rate limit info:', e)
-  }
-}, { deep: true })
 
 const handleVerificationInput = (event) => {
   // Only allow digits
@@ -731,6 +711,11 @@ const goBack = () => {
   verificationError.value = ''
   sessionToken.value = ''
 }
+
+// Lifecycle
+onMounted(() => {
+  console.log('Cecilia subscription app loaded!')
+})
 </script>
 
 <style scoped>
