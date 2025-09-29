@@ -15,6 +15,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from aiohttp import web
 
+from markdown2pdf import convert_markdown_to_pdf
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -97,14 +99,28 @@ class DeepResearchWrapper:
             
             logger.info(f"Starting deep research for query: {query}")
             
+            # Create data/deep_research directory if it doesn't exist
+            data_dir = os.path.join('.', "data", "deep_research")
+            os.makedirs(data_dir, exist_ok=True)
+            
+            # Generate filename with timestamp
+            tz = timezone('Asia/Shanghai')
+            timestamp = datetime.now(tz).strftime("%Y%m%d_%H%M%S")
+            safe_query = "".join(c for c in arguments.get("query", "research") if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            safe_query = safe_query.replace(' ', '_')[:50]  # Limit length
+            
+            filename = f"deep_research_response_{safe_query}_{timestamp}"
+            txtpath = os.path.join(data_dir, filename + '.txt')
+            pdfpath = '/home/ubuntu/hosted-files/deep-research/' + filename + '.pdf'
+            
             # Start deep research via inner MCP server
-            research_result = await self.call_inner_deep_research(arguments)
+            research_result = await self.call_inner_deep_research(arguments, txtpath)
             
             if not research_result:
                 return [types.TextContent(type="text", text="❌ Error: Failed to get research results from inner server")]
             
             # Convert markdown to PDF
-            pdf_path = await self.convert_markdown_to_pdf(research_result, query)
+            pdf_path = await convert_markdown_to_pdf(research_result, query, pdfpath)
             
             # Send to Discord
             await self.send_to_discord(pdf_path, query)
@@ -122,7 +138,7 @@ class DeepResearchWrapper:
             logger.error(f"Error in deep research: {e}")
             return [types.TextContent(type="text", text=f"❌ Error: {str(e)}")]
     
-    async def call_inner_deep_research(self, arguments: Dict[str, Any]) -> Optional[str]:
+    async def call_inner_deep_research(self, arguments: Dict[str, Any], txtpath) -> Optional[str]:
         """Call the inner deep research MCP server via HTTP MCP protocol"""
         try:
             url = f"http://localhost:{self.inner_port}/api/mcp"
@@ -149,50 +165,87 @@ class DeepResearchWrapper:
             
             full_response = ""
             
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=mcp_request, headers=headers) as response:
+            # Create connector with unlimited read buffer size and no chunk limit
+            connector = aiohttp.TCPConnector(
+                limit=100000000,  # No connection limit
+                limit_per_host=100000000,  # No per-host limit
+            )
+            
+            async with aiohttp.ClientSession(
+                timeout=timeout, 
+                connector=connector,
+                read_bufsize=100000000  # Unlimited read buffer
+            ) as session:
+                async with session.post(
+                    url, 
+                    json=mcp_request, 
+                    headers=headers,
+                    max_line_size=100000000,  # No line size limit
+                    max_field_size=100000000  # No field size limit
+                ) as response:
                     if response.status != 200:
                         logger.error(f"Inner server error: {response.status}")
                         error_text = await response.text()
                         logger.error(f"Inner server error response: {error_text}")
                         return None
                     
-                    # Handle streamable response
-                    async for line in response.content:
-                        line = line.decode('utf-8').strip()
+                    # Read response content without chunk limits
+                    try:
+                        # Read the entire response at once to avoid chunking issues
+                        response_data = await response.read()
+                        response_text = response_data.decode('utf-8')
                         
-                        # Skip empty lines
-                        if not line:
-                            continue
-                            
+                        # Save response to file for debugging and archival
                         try:
-                            # Parse JSON-RPC response
-                            json_response = json.loads(line)
+                            # Save the raw response
+                            with open(txtpath, 'w', encoding='utf-8') as f:
+                                f.write(response_text)
                             
-                            # Handle different response types
-                            if "result" in json_response:
-                                # Final result
-                                result = json_response["result"]
-                                if isinstance(result, list) and len(result) > 0:
-                                    # Extract content from TextContent
-                                    content_item = result[0]
-                                    if isinstance(content_item, dict) and "text" in content_item:
-                                        full_response = content_item["text"]
-                                    elif isinstance(content_item, str):
-                                        full_response = content_item
-                                break
-                            elif "method" in json_response and json_response["method"] == "notifications/progress":
-                                # Progress notification - can be logged but we continue waiting
-                                logger.info(f"Deep research progress: {json_response.get('params', {})}")
+                            logger.info(f"Response saved to: {txtpath + '.txt'}")
+                            
+                        except Exception as save_error:
+                            logger.warning(f"Could not save response to file: {save_error}")
+                        
+                        # Handle multiple JSON responses if they exist
+                        for line in response_text.strip().split('\n'):
+                            line = line.strip()
+                            
+                            # Skip empty lines
+                            if not line:
                                 continue
-                            elif "error" in json_response:
-                                # Error response
-                                logger.error(f"Inner server returned error: {json_response['error']}")
-                                return None
                                 
-                        except json.JSONDecodeError:
-                            # If it's not JSON, treat as raw content
-                            full_response += line + "\n"
+                            try:
+                                # Parse JSON-RPC response
+                                json_response = json.loads(line)
+                                
+                                # Handle different response types
+                                if "result" in json_response:
+                                    # Final result
+                                    result = json_response["result"]
+                                    if isinstance(result, list) and len(result) > 0:
+                                        # Extract content from TextContent
+                                        content_item = result[0]
+                                        if isinstance(content_item, dict) and "text" in content_item:
+                                            full_response = content_item["text"]
+                                        elif isinstance(content_item, str):
+                                            full_response = content_item
+                                    break
+                                elif "method" in json_response and json_response["method"] == "notifications/progress":
+                                    # Progress notification - can be logged but we continue waiting
+                                    logger.info(f"Deep research progress: {json_response.get('params', {})}")
+                                    continue
+                                elif "error" in json_response:
+                                    # Error response
+                                    logger.error(f"Inner server returned error: {json_response['error']}")
+                                    return None
+                                    
+                            except json.JSONDecodeError:
+                                # If it's not JSON, treat as raw content
+                                full_response += line + "\n"
+                        
+                    except Exception as e:
+                        logger.error(f"Error reading response data: {e}")
+                        return None
             
             return full_response.strip() if full_response else None
             
@@ -200,120 +253,9 @@ class DeepResearchWrapper:
             logger.error(f"Error calling inner deep research: {e}")
             return None
     
-    async def convert_markdown_to_pdf(self, markdown_content: str, topic: str) -> str:
-        """Convert markdown content to PDF"""
-        try:
-            # Create temporary file
-            tz = timezone('Asia/Shanghai')
-            timestamp = datetime.now(tz).strftime("%Y%m%d_%H%M%S")
-            safe_topic = "".join(c for c in topic if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            safe_topic = safe_topic.replace(' ', '_')[:50]  # Limit length
-            
-            temp_dir = tempfile.gettempdir()
-            pdf_filename = f"deep_research_{safe_topic}_{timestamp}.pdf"
-            pdf_path = os.path.join(temp_dir, pdf_filename)
-            
-            # Convert markdown to HTML
-            html_content = markdown.markdown(
-                markdown_content,
-                extensions=['tables', 'fenced_code', 'toc']
-            )
-            
-            # Add CSS styling
-            css_content = CSS(string='''
-                @page {
-                    margin: 2cm;
-                    @top-center {
-                        content: "Deep Research Report";
-                        font-family: Arial, sans-serif;
-                        font-size: 12px;
-                        color: #666;
-                    }
-                }
-                body {
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                    color: #333;
-                }
-                h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
-                h2 { color: #34495e; border-left: 4px solid #3498db; padding-left: 10px; }
-                h3 { color: #555; }
-                code {
-                    background-color: #f4f4f4;
-                    padding: 2px 4px;
-                    border-radius: 3px;
-                    font-family: monospace;
-                }
-                pre {
-                    background-color: #f8f8f8;
-                    padding: 10px;
-                    border-radius: 5px;
-                    overflow-wrap: break-word;
-                }
-                table {
-                    border-collapse: collapse;
-                    width: 100%;
-                    margin: 10px 0;
-                }
-                th, td {
-                    border: 1px solid #ddd;
-                    padding: 8px;
-                    text-align: left;
-                }
-                th {
-                    background-color: #f2f2f2;
-                    font-weight: bold;
-                }
-                blockquote {
-                    border-left: 4px solid #ddd;
-                    margin: 0;
-                    padding-left: 20px;
-                    font-style: italic;
-                    color: #666;
-                }
-                a {
-                    color: #3498db;
-                    text-decoration: none;
-                }
-                a:hover {
-                    text-decoration: underline;
-                }
-            ''')
-            
-            # Create full HTML document
-            full_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>Deep Research: {topic}</title>
-            </head>
-            <body>
-                <div style="text-align: center; margin-bottom: 30px;">
-                    <h1 style="color: #2c3e50; border: none;">🔬 Deep Research Report</h1>
-                    <p style="color: #7f8c8d; font-size: 14px;">Topic: {topic}</p>
-                    <p style="color: #7f8c8d; font-size: 12px;">Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-                </div>
-                {html_content}
-                <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; text-align: center; color: #999; font-size: 12px;">
-                    <p>Generated by Cecilia Bot - Deep Research System</p>
-                </div>
-            </body>
-            </html>
-            """
-            
-            # Convert to PDF
-            HTML(string=full_html).write_pdf(pdf_path, stylesheets=[css_content])
-            
-            logger.info(f"PDF created: {pdf_path}")
-            return pdf_path
-            
-        except Exception as e:
-            logger.error(f"Error converting to PDF: {e}")
-            raise
     
     async def send_to_discord(self, pdf_path: str, topic: str):
-        """Send PDF report to Discord channel"""
+        """Send PDF report link to Discord channel with preview embed"""
         try:
             if not self.bot_instance:
                 logger.error("Bot instance not available for Discord sending")
@@ -323,6 +265,10 @@ class DeepResearchWrapper:
             if not channel:
                 logger.error(f"Discord channel {self.discord_channel_id} not found")
                 return
+            
+            # Extract PDF filename from path
+            pdf_filename = os.path.basename(pdf_path)
+            hosted_url = f"https://files.dywsy21.cn:18080/deep-research/{pdf_filename}"
             
             # Create cute greeting message
             greeting_messages = [
@@ -336,13 +282,14 @@ class DeepResearchWrapper:
             import random
             greeting = random.choice(greeting_messages)
             
-            # Create embed
+            # Create embed with PDF preview
             import discord
             embed = discord.Embed(
                 title="🔬 Deep Research Report Completed!",
                 description=f"I've conducted a thorough research analysis on your requested topic and compiled everything into a beautiful PDF report! 📄✨",
                 color=0x00ff9f,  # Bright mint green
-                timestamp=datetime.utcnow()
+                timestamp=datetime.utcnow(),
+                url=hosted_url  # Make the embed title clickable
             )
             
             embed.add_field(
@@ -363,21 +310,29 @@ class DeepResearchWrapper:
                 inline=True
             )
             
-            embed.set_footer(
-                text="Powered by Cecilia's Deep Research System 🤖",
-                icon_url="https://cdn.discordapp.com/emojis/1234567890123456789.png"  # Optional: Add bot avatar
+            # Add download link field
+            embed.add_field(
+                name="📥 Access Report",
+                value=f"[🔗 **View & Download PDF**]({hosted_url})\n📱 *Click to open in browser*",
+                inline=False
             )
             
-            # Send message with PDF attachment
-            with open(pdf_path, 'rb') as pdf_file:
-                discord_file = discord.File(pdf_file, filename=f"research_{topic.replace(' ', '_')}.pdf")
-                await channel.send(
-                    content=greeting,
-                    embed=embed,
-                    file=discord_file
-                )
+            # Set PDF as image for Discord preview (Discord will attempt to show PDF preview)
+            embed.set_image(url=hosted_url)
             
-            logger.info(f"Successfully sent research report to Discord channel {self.discord_channel_id}")
+            embed.set_footer(
+                text=f"PDF: {pdf_filename} • Powered by Cecilia's Deep Research System 🤖",
+                icon_url="https://files.dywsy21.cn:18080/homepage/avatar.png"  # Optional: Add bot avatar
+            )
+            
+            # Send message with embed containing PDF link
+            await channel.send(
+                content=greeting,
+                embed=embed
+            )
+            
+            logger.info(f"Successfully sent research report link to Discord channel {self.discord_channel_id}")
+            logger.info(f"PDF accessible at: {hosted_url}")
             
         except Exception as e:
             logger.error(f"Error sending to Discord: {e}")

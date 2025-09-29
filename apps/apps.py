@@ -114,20 +114,31 @@ class AppManager:
             app = web.Application()
             self.subscription_service.setup_routes(app)
             
-            # Add CORS middleware
+            # Add CORS middleware - FIXED
+            @web.middleware
             async def cors_middleware(request, handler):
+                # Handle preflight OPTIONS requests
                 if request.method == 'OPTIONS':
-                    return web.Response(
-                        headers={
-                            'Access-Control-Allow-Origin': '*',
-                            'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-                            'Access-Control-Allow-Headers': 'Content-Type',
-                            'Access-Control-Max-Age': '86400'
-                        }
+                    response = web.Response()
+                    response.headers['Access-Control-Allow-Origin'] = '*'
+                    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+                    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                    response.headers['Access-Control-Max-Age'] = '86400'
+                    return response
+                
+                try:
+                    response = await handler(request)
+                except Exception as e:
+                    logger.error(f"Handler error: {e}")
+                    response = web.json_response(
+                        {'error': 'Internal server error'}, 
+                        status=500
                     )
                 
-                response = await handler(request)
+                # Add CORS headers to all responses
                 response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
                 return response
             
             app.middlewares.append(cors_middleware)
@@ -157,8 +168,9 @@ class AppManager:
                 logger.error(f"Port {port} already in use - cannot start subscription service")
                 raise CeciliaServiceError(f"Cannot bind to port {port} - address already in use")
             else:
-                logger.error(f"OS error starting subscription service: {e}")
-                raise CeciliaServiceError(f"System error starting subscription service: {e}")
+                logger.error(f"Failed to start subscription service: {e}")
+                raise CeciliaServiceError(f"Cannot start subscription service: {e}")
+                
         except Exception as e:
             logger.error(f"Failed to start subscription service: {e}")
             raise CeciliaServiceError(f"Cannot start subscription service: {e}")
@@ -300,5 +312,3 @@ class AppManager:
                 except asyncio.CancelledError:
                     pass
                 logger.info("Deep Research Wrapper stopped")
-        except Exception as e:
-            logger.error(f"Error shutting down services: {e}")

@@ -24,7 +24,7 @@ mkdir -p data/essay_summarizer/summaries
 
 # Initialize email targets file
 echo "📧 Initializing email targets..."
-echo '{}' > data/essay_summarizer/email_targets.json
+# echo '{}' > data/essay_summarizer/email_targets.json
 
 # Set up Vue frontend
 echo "🌐 Setting up Vue frontend..."

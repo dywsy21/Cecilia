@@ -14,7 +14,7 @@
     "vue": "^3.4.0",
     "axios": "^1.6.0",
     "@vueuse/core": "^10.7.0",
-    "vue-toastification": "^2.0.0",
+    "vue-toastification": "^2.0.0-rc.5",
     "@headlessui/vue": "^1.7.16",
     "@heroicons/vue": "^2.0.18"
   },

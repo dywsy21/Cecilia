@@ -212,6 +212,60 @@ class LLMHandler:
             logger.error(f"Error summarizing with OpenAI: {e}")
             return None
     
+    async def ask_ai(self, prompt: str) -> Optional[str]:
+        """Send a prompt to the AI and return the answer as a string"""
+        try:
+            if self.provider == "OLLAMA":
+                payload = {
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{self.base_url}/api/generate", json=payload, timeout=120) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            return result.get('response', '').strip()
+                        else:
+                            logger.error(f"Ollama API error: {response.status}")
+                            return None
+            elif self.provider == "OPENAI":
+                if not self.api_key:
+                    logger.error("OpenAI API key not configured")
+                    return None
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{self.base_url}/chat/completions",
+                                           headers=headers,
+                                           json=payload,
+                                           timeout=aiohttp.ClientTimeout(total=3000000)) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            if 'choices' in result and len(result['choices']) > 0:
+                                return result['choices'][0]['message']['content'].strip()
+                            else:
+                                logger.error("No choices in OpenAI response")
+                                return None
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"OpenAI API error {response.status}: {error_text}")
+                            return None
+            else:
+                logger.error(f"Unsupported provider: {self.provider}")
+                return None
+        except Exception as e:
+            logger.error(f"Error in ask_ai: {e}")
+            return None
+
     def get_provider_info(self) -> Dict[str, Any]:
         """Get information about the current LLM provider"""
         return {
