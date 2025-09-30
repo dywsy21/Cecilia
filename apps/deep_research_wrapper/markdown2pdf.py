@@ -4,6 +4,7 @@ import os
 import tempfile
 import markdown
 from weasyprint import CSS, HTML
+from apps.llm_handler.llm_handler import LLMHandler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
