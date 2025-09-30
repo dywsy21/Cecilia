@@ -2,6 +2,7 @@ import asyncio
 import logging
 import signal
 import sys
+import os
 from bot.bot import CeciliaBot, DISCORD_TOKEN
 from apps.apps import AppManager
 
@@ -20,6 +21,7 @@ class CeciliaServiceError(Exception):
 async def main():
     """Main entry point for Cecilia bot with all services"""
     logger.info("Starting Cecilia Discord Bot with all services...")
+    logger.info(f"Current working directory: {os.getcwd()}")
     
     try:
         # Create bot instance

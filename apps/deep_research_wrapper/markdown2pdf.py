@@ -367,6 +367,7 @@ async def _convert_with_pandoc(md_path: str, output_pdf_path: str) -> None:
         xelatex_paths = [
             "/usr/local/texlive/2025/bin/x86_64-linux/xelatex",
             "/usr/local/texlive/2024/bin/x86_64-linux/xelatex", 
+            "/usr/local/texlive/2023/bin/x86_64-linux/xelatex", 
             "/usr/bin/xelatex",
             "/usr/local/bin/xelatex",
             "xelatex"
@@ -413,7 +414,7 @@ async def _convert_with_pandoc(md_path: str, output_pdf_path: str) -> None:
             raise RuntimeError("XeLaTeX not found in any of the expected locations")
         
         # Check if dissertation template exists
-        template_path = "./dissertation/dissertation.tex"
+        template_path = "/home/ubuntu/Cecilia/dissertation/dissertation.tex"
         
         if os.path.exists(template_path):
             # Use custom template if available
@@ -446,6 +447,27 @@ async def _convert_with_pandoc(md_path: str, output_pdf_path: str) -> None:
         
         logger.info(f"Pandoc stdout: {stdout}")
         logger.info(f"Pandoc stderr: {stderr}")
+        
+        # Check if PDF was actually created
+        if not os.path.exists(output_pdf_path):
+            # Try alternative execution method
+            logger.warning("PDF not created with asyncio method, trying subprocess.run")
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                logger.info(f"Subprocess stdout: {result.stdout}")
+                logger.info(f"Subprocess stderr: {result.stderr}")
+                
+                if result.returncode != 0:
+                    logger.error(f"Subprocess pandoc failed with return code {result.returncode}")
+                
+            except subprocess.TimeoutExpired:
+                logger.error("Pandoc subprocess timed out after 300 seconds")
+            except Exception as subprocess_error:
+                logger.error(f"Subprocess execution failed: {subprocess_error}")
+
+            # Check again if PDF was created
+            if not os.path.exists(output_pdf_path):
+                raise RuntimeError(f"PDF file was not created at {output_pdf_path}, why??? Fuck you pandoc")
         
         if process.returncode == 0:
             logger.info(f"Pandoc conversion successful: {output_pdf_path}")
