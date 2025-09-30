@@ -15,7 +15,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from aiohttp import web
 
-from markdown2pdf import convert_markdown_to_pdf
+from .markdown2pdf import convert_markdown_to_pdf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -103,15 +103,17 @@ class DeepResearchWrapper:
             data_dir = os.path.join('.', "data", "deep_research")
             os.makedirs(data_dir, exist_ok=True)
             
+            # Ensure hosted-files directory exists
+            os.makedirs('/home/ubuntu/hosted-files/deep-research/', exist_ok=True)
+            
             # Generate filename with timestamp
             tz = timezone('Asia/Shanghai')
             timestamp = datetime.now(tz).strftime("%Y%m%d_%H%M%S")
-            safe_query = "".join(c for c in arguments.get("query", "research") if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            safe_query = safe_query.replace(' ', '_')[:50]  # Limit length
             
-            filename = f"deep_research_response_{safe_query}_{timestamp}"
+            filename = f"resp_{timestamp}"
+            pdf_filename = filename + '.pdf'
             txtpath = os.path.join(data_dir, filename + '.txt')
-            pdfpath = '/home/ubuntu/hosted-files/deep-research/' + filename + '.pdf'
+            pdfpath = '/home/ubuntu/hosted-files/deep-research/' + pdf_filename
             
             # Start deep research via inner MCP server
             research_result = await self.call_inner_deep_research(arguments, txtpath)
@@ -120,20 +122,29 @@ class DeepResearchWrapper:
                 return [types.TextContent(type="text", text="❌ Error: Failed to get research results from inner server")]
             
             # Convert markdown to PDF
-            pdf_path = await convert_markdown_to_pdf(research_result, query, pdfpath)
+            try:
+                pdf_path = await convert_markdown_to_pdf(txtpath, query, pdfpath)
+                logger.info(f"PDF conversion completed: {pdf_path}")
+            except Exception as pdf_error:
+                logger.error(f"PDF conversion failed: {pdf_error}")
+                return [types.TextContent(type="text", text=f"❌ Error: PDF conversion failed: {str(pdf_error)}")]
             
             # Send to Discord
-            await self.send_to_discord(pdf_path, query)
-            
-            # Clean up temp file
-            if os.path.exists(pdf_path):
-                os.remove(pdf_path)
-            
-            return [types.TextContent(
-                type="text", 
-                text=f"✅ Deep research session on '{query}' has successfully finished. Results have been delivered to Discord channel."
-            )]
-            
+            try:
+                await self.send_to_discord(pdf_path, query)
+                logger.info("Discord notification sent successfully")
+            except Exception as discord_error:
+                logger.error(f"Discord notification failed: {discord_error}")
+                # Don't fail the whole operation if Discord fails
+        
+        # Create hosted URL
+        hosted_url = f"https://files.dywsy21.cn:18080/deep-research/{pdf_filename}"
+        
+        # Return success message with proper TextContent format
+        success_message = f"✅ Deep research session on '{query}' has successfully finished. Results have been delivered to Discord channel. The PDF can be viewed at {hosted_url}."
+        
+        return [types.TextContent(type="text", text=success_message)]
+        
         except Exception as e:
             logger.error(f"Error in deep research: {e}")
             return [types.TextContent(type="text", text=f"❌ Error: {str(e)}")]
@@ -470,13 +481,28 @@ class DeepResearchWrapper:
                             logger.info(f"Executing deep research with arguments: {arguments}")
                             result = await self.handle_deep_research(arguments)
                             
-                            # Return standard JSON response for N8N compatibility
+                            # Convert TextContent objects to proper format for N8N
+                            response_content = []
+                            for item in result:
+                                if hasattr(item, 'model_dump'):
+                                    response_content.append(item.model_dump())
+                                elif hasattr(item, '__dict__'):
+                                    response_content.append(item.__dict__)
+                                else:
+                                    # Fallback: create proper TextContent structure
+                                    response_content.append({
+                                        "type": "text",
+                                        "text": str(item)
+                                    })
+                            
+                            # Return standard JSON-RPC response for N8N compatibility
                             final_response = {
                                 "jsonrpc": "2.0",
                                 "id": request_id,
-                                "result": [item.model_dump() for item in result]
+                                "result": response_content
                             }
-                            logger.info(f"Deep research completed successfully")
+                            
+                            logger.info(f"Deep research completed successfully, returning response with {len(response_content)} items")
                             return web.json_response(final_response)
                             
                         except Exception as e:

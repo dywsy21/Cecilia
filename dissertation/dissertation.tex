@@ -44,11 +44,10 @@
 \PassOptionsToPackage{unicode$for(hyperrefoptions)$,$hyperrefoptions$$endfor$}{hyperref}
 \PassOptionsToPackage{hyphens}{url}
 \PassOptionsToPackage{dvipsnames,svgnames,x11names,table}{xcolor}
+
+
 $if(CJKmainfont)$
 \PassOptionsToPackage{space}{xeCJK}
-\usepackage{datetime}
-\usepackage{xeCJK}
-
 $endif$
 %
 \documentclass[
@@ -74,6 +73,64 @@ $for(classoption)$
 $endfor$
   ,captions=tableheading
 ]{$if(beamer)$$documentclass$$else$$if(book)$scrbook$else$scrartcl$endif$$endif$}
+
+% Chinese font support
+\usepackage{datetime}
+\usepackage{xeCJK}
+\usepackage{fontspec}
+
+% Set Chinese fonts with fallback options
+  \setCJKmainfont[
+    BoldFont={Noto Sans CJK SC Bold},
+    ItalicFont={Noto Sans CJK SC}
+  ]{Noto Sans CJK SC}
+  
+  \setCJKsansfont[
+    BoldFont={Noto Sans CJK SC Bold}
+  ]{Noto Sans CJK SC}
+  
+  \setCJKmonofont{sourcesanspro}
+  
+  % Fallback fonts if Noto is not available
+  \newfontfamily\zhfont[
+    BoldFont={WenQuanYi Micro Hei},
+    Mapping=tex-text
+  ]{WenQuanYi Micro Hei}
+
+% Set default CJK spacing
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip = 0pt plus 1pt
+
+
+
+  % Default Chinese font setup if no CJKmainfont specified
+    % Try to set Chinese fonts with fallback
+    \IfFontExistsTF{Noto Sans CJK SC}{
+      \setCJKmainfont[
+        BoldFont={Noto Sans CJK SC Bold},
+        ItalicFont={Noto Sans CJK SC}
+      ]{Noto Sans CJK SC}
+      \setCJKsansfont{Noto Sans CJK SC}
+      \setCJKmonofont{Noto Sans Mono CJK SC}
+    }{
+      \IfFontExistsTF{WenQuanYi Micro Hei}{
+        \setCJKmainfont{WenQuanYi Micro Hei}
+        \setCJKsansfont{WenQuanYi Micro Hei}
+        \setCJKmonofont{WenQuanYi Micro Hei Mono}
+      }{
+        \IfFontExistsTF{SimSun}{
+          \setCJKmainfont{SimSun}
+          \setCJKsansfont{SimHei}
+          \setCJKmonofont{FangSong}
+        }{
+          % Last resort - use any available system font
+          \setCJKmainfont{DejaVu Sans}
+        }
+      }
+    }
+
+
+
 $if(beamer)$
 $if(background-image)$
 \usebackgroundtemplate{%
@@ -452,19 +509,22 @@ $if(csl-refs)$
 \newlength{\cslhangindent}
 \setlength{\cslhangindent}{1.5em}
 \newlength{\csllabelwidth}
-\setlength{\csllabelwidth}{3em}
+\setlength{\csllabelwidth}{0em}
 \newenvironment{CSLReferences}[2] % #1 hanging-indent, #2 entry-spacing
-  {\begin{list}{}{%
+  {\par\noindent\begin{list}{}{%
    \setlength{\itemindent}{0pt}
    \setlength{\leftmargin}{0pt}
    \setlength{\parsep}{0pt}
+   \setlength{\labelsep}{0pt}
+   \setlength{\labelwidth}{0pt}
    % turn on hanging indent if param 1 is 1
    \ifodd #1
     \setlength{\leftmargin}{\cslhangindent}
     \setlength{\itemindent}{-1\cslhangindent}
    \fi
    % set entry spacing
-   \setlength{\itemsep}{#2\baselineskip}}}
+   \setlength{\itemsep}{#2\baselineskip}}%
+   \item[]}
   {\end{list}}
 \usepackage{calc}
 \newcommand{\CSLBlock}[1]{\hfill\break\parbox[t]{\linewidth}{\strut\ignorespaces#1\strut}}
@@ -673,29 +733,45 @@ $endif$
 \else % if not pdftex
   $if(mainfont)$
   $else$
-  \usepackage[default]{sourcesanspro}
-  \usepackage{sourcecodepro}
+  % Set main fonts but preserve Chinese font capability
+  \setmainfont[
+    Ligatures=TeX,
+    Scale=1.0
+  ]{Source Sans Pro}
+  
+  \setsansfont[
+    Ligatures=TeX,
+    Scale=1.0  
+  ]{Source Sans Pro}
+  
+%   \setmonofont[
+%     Scale=0.9
+%   ]{Source Code Pro}
 
+% \setmonofont[
+%     Scale=0.9
+%   ]{sourcecodepro}
+  
   % XeLaTeX specific adjustments for straight quotes: https://tex.stackexchange.com/a/354887
   % This issue is already fixed (see https://github.com/silkeh/latex-sourcecodepro/pull/5) but the
   % fix is still unreleased.
-  % TODO: Remove this workaround when the new version of sourcecodepro is released on CTAN.
-  \ifxetex
-    \makeatletter
-    \defaultfontfeatures[\ttfamily]
-      { Numbers   = \sourcecodepro@figurestyle,
-        Scale     = \SourceCodePro@scale,
-        Extension = .otf }
-    \setmonofont
-      [ UprightFont    = *-\sourcecodepro@regstyle,
-        ItalicFont     = *-\sourcecodepro@regstyle It,
-        BoldFont       = *-\sourcecodepro@boldstyle,
-        BoldItalicFont = *-\sourcecodepro@boldstyle It ]
-      {SourceCodePro}
-    \makeatother
-  \fi
-  $endif$
-\fi
+%   % TODO: Remove this workaround when the new version of sourcecodepro is released on CTAN.
+%   \ifxetex
+%     \makeatletter
+%     \defaultfontfeatures[\ttfamily]
+%       { Numbers   = \sourcecodepro@figurestyle,
+%         Scale     = \SourceCodePro@scale,
+%         Extension = .otf }
+%     \setmonofont
+%       [ UprightFont    = *-\sourcecodepro@regstyle,
+%         ItalicFont     = *-\sourcecodepro@regstyle It,
+%         BoldFont       = *-\sourcecodepro@boldstyle,
+%         BoldItalicFont = *-\sourcecodepro@boldstyle It ]
+%       {SourceCodePro}
+%     \makeatother
+%   \fi
+%   $endif$
+% \fi
 
 %
 % heading color
@@ -1059,9 +1135,9 @@ $if(has-frontmatter)$
 % \maketitle
 \pagenumbering{Roman} % set the numbering style to lowercase letter
 
-\begin{center}
- {\LARGE \textbf{\textsf{Abstract}}}
-\end{center}
+% \begin{center}
+%  {\LARGE \textbf{\textsf{Abstract}}}
+% \end{center}
 
 % \begin{abstract}
 % \begin{justify}

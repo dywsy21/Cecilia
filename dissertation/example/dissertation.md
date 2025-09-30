@@ -72,5 +72,3 @@ Tulit et unda medios, iuvenes parem. Manifesta aspicit, quibus montibus et ante
 est: ipso [iustae](http://ad-sive.org/ferro.html) et ut choreas Talibus,
 numerum. Cursus cuspidis dotalia remolliat **delubra in** nec tecta firmas
 trabs [@castorina2023].
-
-[https://vitalflux.com/wp-content/uploads/2024/10/switch-transformers-using-MoE-300x160.png](https://vitalflux.com/wp-content/uploads/2024/10/switch-transformers-using-MoE-300x160.png)
