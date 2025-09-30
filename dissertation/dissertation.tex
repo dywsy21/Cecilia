@@ -89,7 +89,7 @@ $endfor$
     BoldFont={Noto Sans CJK SC Bold}
   ]{Noto Sans CJK SC}
   
-  \setCJKmonofont{sourcesanspro}
+  \setCJKmonofont{DejaVu Sans Mono}
   
   % Fallback fonts if Noto is not available
   \newfontfamily\zhfont[
@@ -111,17 +111,17 @@ $endfor$
         ItalicFont={Noto Sans CJK SC}
       ]{Noto Sans CJK SC}
       \setCJKsansfont{Noto Sans CJK SC}
-      \setCJKmonofont{Noto Sans Mono CJK SC}
+      \setCJKmonofont{DejaVu Sans Mono}
     }{
       \IfFontExistsTF{WenQuanYi Micro Hei}{
         \setCJKmainfont{WenQuanYi Micro Hei}
         \setCJKsansfont{WenQuanYi Micro Hei}
-        \setCJKmonofont{WenQuanYi Micro Hei Mono}
+        \setCJKmonofont{DejaVu Sans Mono}
       }{
         \IfFontExistsTF{SimSun}{
           \setCJKmainfont{SimSun}
           \setCJKsansfont{SimHei}
-          \setCJKmonofont{FangSong}
+          \setCJKmonofont{DejaVu Sans Mono}
         }{
           % Last resort - use any available system font
           \setCJKmainfont{DejaVu Sans}
@@ -737,12 +737,12 @@ $endif$
   \setmainfont[
     Ligatures=TeX,
     Scale=1.0
-  ]{Source Sans Pro}
+  ]{DejaVu Sans Mono}
   
   \setsansfont[
     Ligatures=TeX,
     Scale=1.0  
-  ]{Source Sans Pro}
+  ]{DejaVu Sans Mono}
   
 %   \setmonofont[
 %     Scale=0.9

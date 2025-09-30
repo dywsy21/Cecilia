@@ -136,15 +136,15 @@ class DeepResearchWrapper:
             except Exception as discord_error:
                 logger.error(f"Discord notification failed: {discord_error}")
                 # Don't fail the whole operation if Discord fails
-        
-        # Create hosted URL
-        hosted_url = f"https://files.dywsy21.cn:18080/deep-research/{pdf_filename}"
-        
-        # Return success message with proper TextContent format
-        success_message = f"✅ Deep research session on '{query}' has successfully finished. Results have been delivered to Discord channel. The PDF can be viewed at {hosted_url}."
-        
-        return [types.TextContent(type="text", text=success_message)]
-        
+            
+            # Create hosted URL
+            hosted_url = f"https://files.dywsy21.cn:18080/deep-research/{pdf_filename}"
+            
+            # Return success message with proper TextContent format
+            success_message = f"✅ Deep research session on '{query}' has successfully finished. Results have been delivered to Discord channel. The PDF can be viewed at {hosted_url}."
+            
+            return [types.TextContent(type="text", text=success_message)]
+            
         except Exception as e:
             logger.error(f"Error in deep research: {e}")
             return [types.TextContent(type="text", text=f"❌ Error: {str(e)}")]

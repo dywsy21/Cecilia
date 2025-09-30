@@ -444,6 +444,9 @@ async def _convert_with_pandoc(md_path: str, output_pdf_path: str) -> None:
         
         stdout, stderr = await process.communicate()
         
+        logger.info(f"Pandoc stdout: {stdout}")
+        logger.info(f"Pandoc stderr: {stderr}")
+        
         if process.returncode == 0:
             logger.info(f"Pandoc conversion successful: {output_pdf_path}")
         else:
@@ -461,8 +464,11 @@ async def _convert_with_pandoc(md_path: str, output_pdf_path: str) -> None:
 if __name__ == '__main__':
     import asyncio
     async def main():
-        topic = 'Recent AI Advancements (2023–2024): Transformative Progress in Large Language Models, Computer Vision, and Reinforcement Learning'
-        input_file_path = '/home/ubuntu/Cecilia/data/deep_research/deep_research_response_Recent_advancements_in_AI_technology_20232024_with_20250929_201858.txt'
-        pdf_path = 'out.pdf'
-        await convert_markdown_to_pdf(input_file_path, topic, pdf_path)
+        # topic = 'Recent AI Advancements (2023–2024): Transformative Progress in Large Language Models, Computer Vision, and Reinforcement Learning'
+        # input_file_path = '/home/ubuntu/Cecilia/data/deep_research/deep_research_response_Recent_advancements_in_AI_technology_20232024_with_20250929_201858.txt'
+        # pdf_path = 'out.pdf'
+        # await convert_markdown_to_pdf(input_file_path, topic, pdf_path)
+        md_path = '/tmp/final_markdown_20250930_193316.md'
+        pdf_path = '/home/ubuntu/hosted-files/deep-research/resp_20250930_191412.pdf'
+        await _convert_with_pandoc(md_path, pdf_path)
     asyncio.run(main())
